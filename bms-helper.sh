@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 
 ############################################################################
-# Star Citizen Linux Users Group Helper Script
+# Falcon BMS Linux installer and launcher script
 ############################################################################
 #
-# Greetings, Space Penguin!
-#
-# This script is designed to help you run Star Citizen on Linux.
+# This script is designed to help you run Falcon BMS on Linux.
 #
 # Please see the project's github repo for more information:
-# https://github.com/starcitizen-lug/lug-helper
+# https://github.com/falcon-bms/linux-helper
 #
-# made with <3 by https://github.com/the-sane
+# Author: https://github.com/maxwaldorf
+# Project inspired from: https://github.com/starcitizen-lug/sc-helper
 #
 # License: GPLv3.0
 ############################################################################
@@ -25,44 +24,55 @@ fi
 # Check for dependencies
 if [ ! -x "$(command -v curl)" ]; then
 # Print to stderr and also try warning the user through zenity or notify-send
-    printf "lug-helper.sh: The required package 'curl' was not found on this system.\n" 1>&2
+    printf "bms-helper.sh: The required package 'curl' was not found on this system.\n" 1>&2
     if [ -x "$(command -v zenity)" ]; then
-        zenity --error --width="400" --title="Star Citizen LUG Helper" --text="The required package 'curl' was not found on this system."
+        zenity --error --width="400" --title="Falcon BMS Linux Helper" --text="The required package 'curl' was not found on this system."
     elif [ -x "$(command -v notify-send)" ]; then
-        notify-send "lug-helper" "The required package 'curl' was not found on this system.\n" --icon=dialog-warning
+        notify-send "bms-helper" "The required package 'curl' was not found on this system.\n" --icon=dialog-warning
     fi
     exit 1
 fi
-if [ ! -x "$(command -v mktemp)" ] || [ ! -x "$(command -v touch)" ] || [ ! -x "$(command -v chmod)" ] || [ ! -x "$(command -v sort)" ] || [ ! -x "$(command -v basename)" ] || [ ! -x "$(command -v realpath)" ] || [ ! -x "$(command -v dirname)" ] || [ ! -x "$(command -v cut)" ] || [ ! -x "$(command -v numfmt)" ] || [ ! -x "$(command -v tr)" ]; then
+if [ ! -x "$(command -v mktemp)" ] || [ ! -x "$(command -v chmod)" ] || [ ! -x "$(command -v sort)" ] || [ ! -x "$(command -v basename)" ] || [ ! -x "$(command -v realpath)" ] || [ ! -x "$(command -v dirname)" ] || [ ! -x "$(command -v cut)" ] || [ ! -x "$(command -v numfmt)" ] || [ ! -x "$(command -v tr)" ] || [ ! -x "$(command -v od)" ] || [ ! -x "$(command -v readlink)" ]; then
     # coreutils
     # Print to stderr and also try warning the user through zenity or notify-send
-    printf "lug-helper.sh: One or more required packages were not found on this system.\nPlease check that 'coreutils' is installed!\n" 1>&2
+    printf "bms-helper.sh: One or more required packages were not found on this system.\nPlease check that 'coreutils' is installed!\n" 1>&2
     if [ -x "$(command -v zenity)" ]; then
-        zenity --error --width="400" --title="Star Citizen LUG Helper" --text="One or more required packages were not found on this system.\n\nPlease check that 'coreutils' is installed!"
+        zenity --error --width="400" --title="Falcon BMS Linux Helper" --text="One or more required packages were not found on this system.\n\nPlease check that 'coreutils' is installed!"
     elif [ -x "$(command -v notify-send)" ]; then
-        notify-send "lug-helper" "One or more required packages were not found on this system.\nPlease check that 'coreutils' is installed!\n" --icon=dialog-warning
+        notify-send "bms-helper" "One or more required packages were not found on this system.\nPlease check that 'coreutils' is installed!\n" --icon=dialog-warning
     fi
     exit 1
 fi
 if [ ! -x "$(command -v xargs)" ]; then
     # findutils
     # Print to stderr and also try warning the user through zenity or notify-send
-    printf "lug-helper.sh: One or more required packages were not found on this system.\nPlease check that 'findutils' or the following packages are installed:\n- xargs\n" 1>&2
+    printf "bms-helper.sh: One or more required packages were not found on this system.\nPlease check that 'findutils' or the following packages are installed:\n- xargs\n" 1>&2
     if [ -x "$(command -v zenity)" ]; then
-        zenity --error --width="400" --title="Star Citizen LUG Helper" --text="One or more required packages were not found on this system.\n\nPlease check that 'findutils' or the following packages are installed:\n- xargs"
+        zenity --error --width="400" --title="Falcon BMS Linux Helper" --text="One or more required packages were not found on this system.\n\nPlease check that 'findutils' or the following packages are installed:\n- xargs"
     elif [ -x "$(command -v notify-send)" ]; then
-        notify-send "lug-helper" "One or more required packages were not found on this system.\nPlease check that 'findutils' or the following packages are installed:\n- xargs\n" --icon=dialog-warning
+        notify-send "bms-helper" "One or more required packages were not found on this system.\nPlease check that 'findutils' or the following packages are installed:\n- xargs\n" --icon=dialog-warning
     fi
     exit 1
 fi
 if [ ! -x "$(command -v cabextract)" ] || [ ! -x "$(command -v unzip)" ]; then
     # winetricks dependencies
     # Print to stderr and also try warning the user through zenity or notify-send
-    printf "lug-helper.sh: One or more required packages were not found on this system.\nPlease check that the following winetricks dependencies (or winetricks itself) are installed:\n- cabextract\n- unzip\n" 1>&2
+    printf "bms-helper.sh: One or more required packages were not found on this system.\nPlease check that the following winetricks dependencies (or winetricks itself) are installed:\n- cabextract\n- unzip\n" 1>&2
     if [ -x "$(command -v zenity)" ]; then
-        zenity --error --width="400" --title="Star Citizen LUG Helper" --text="One or more required packages were not found on this system.\n\nPlease check that the following winetricks dependencies (or winetricks itself) are installed:\n- cabextract\n- unzip"
+        zenity --error --width="400" --title="Falcon BMS Linux Helper" --text="One or more required packages were not found on this system.\n\nPlease check that the following winetricks dependencies (or winetricks itself) are installed:\n- cabextract\n- unzip"
     elif [ -x "$(command -v notify-send)" ]; then
-        notify-send "lug-helper" "One or more required packages were not found on this system.\nPlease check that the following winetricks dependencies (or winetricks itself) are installed:\n- cabextract\n- unzip\n" --icon=dialog-warning
+        notify-send "bms-helper" "One or more required packages were not found on this system.\nPlease check that the following winetricks dependencies (or winetricks itself) are installed:\n- cabextract\n- unzip\n" --icon=dialog-warning
+    fi
+    exit 1
+fi
+if [ ! -x "$(command -v wine)" ]; then
+    # wine
+    # Print to stderr and also try warning the user through zenity or notify-send
+    printf "bms-helper.sh: One or more required packages were not found on this system.\nPlease check that 'wine' is installed!\n" 1>&2
+    if [ -x "$(command -v zenity)" ]; then
+        zenity --error --width="400" --title="Falcon BMS Linux Helper" --text="One or more required packages were not found on this system.\n\nPlease check that 'wine' is installed!"
+    elif [ -x "$(command -v notify-send)" ]; then
+        notify-send "bms-helper" "One or more required packages were not found on this system.\nPlease check that 'wine' is installed!\n" --icon=dialog-warning
     fi
     exit 1
 fi
@@ -73,6 +83,8 @@ wine_conf="winedir.conf"
 game_conf="gamedir.conf"
 firstrun_conf="firstrun.conf"
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+
 # Use XDG base directories if defined
 if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs" ]; then
     # Source the user's xdg directories
@@ -82,13 +94,13 @@ conf_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 
 # .config subdirectory
-conf_subdir="starcitizen-lug"
+conf_subdir="bms-helper"
 
 # Helper directory
 helper_dir="$(realpath "$0" | xargs -0 dirname)"
 
 # Temporary directory
-tmp_dir="$(mktemp -d -t "lughelper.XXXXXXXXXX")"
+tmp_dir="$(mktemp -d -t "bmshelper.XXXXXXXXXX")"
 trap 'rm -r --interactive=never "$tmp_dir"' EXIT
 
 # Set a maximum number of versions to display from each download url
@@ -97,19 +109,19 @@ max_download_items=25
 ######## Game Directories ##################################################
 
 # The game's base directory name
-sc_base_dir="StarCitizen"
+bms_base_dir="Falcon BMS 4.38"
 # The default install location within a WINE prefix:
-default_install_path="drive_c/Program Files/Roberts Space Industries"
+default_install_path="drive_c"
 
 # Remaining directory paths are set at the end of the getdirs() function
 
 ######## Bundled Files #####################################################
 
-rsi_icon_name="rsi-launcher.png"
-wine_launch_script_name="sc-launch.sh"
+bms_icon_name="bms-launcher.png"
+wine_launch_script_name="bms-launch.sh"
 
 # Default to files in the Helper directory for a git download
-rsi_icon="$helper_dir/$rsi_icon_name"
+bms_icon="$helper_dir/$bms_icon_name"
 wine_launch_script="$helper_dir/lib/$wine_launch_script_name"
 
 # Build our array of search paths, supporting packaged versions of this script
@@ -119,18 +131,13 @@ IFS=':' read -r -a data_dirs_array <<< "$XDG_DATA_DIRS:/usr/share/"
 # Locate our files in the search array
 for searchdir in "${data_dirs_array[@]}"; do
     # Check if we've found all our files and break the loop
-    if [ -f "$rsi_icon" ] && [ -f "$wine_launch_script" ]; then
+    if [ -f "$bms_icon" ] && [ -f "$wine_launch_script" ]; then
         break
     fi
 
-    # rsi-launcher.png
-    if [ ! -f "$rsi_icon" ] && [ -f "$searchdir/icons/hicolor/256x256/apps/$rsi_icon_name" ]; then
-        rsi_icon="$searchdir/icons/hicolor/256x256/apps/$rsi_icon_name"
-    fi
-
-    # sc-launch.sh
-    if [ ! -f "$wine_launch_script" ] && [ -f "$searchdir/lug-helper/$wine_launch_script_name" ]; then
-        wine_launch_script="$searchdir/lug-helper/$wine_launch_script_name"
+    # bms-launcher.png
+    if [ ! -f "$bms_icon" ] && [ -f "$searchdir/icons/hicolor/256x256/apps/$bms_icon_name" ]; then
+        bms_icon="$searchdir/icons/hicolor/256x256/apps/$bms_icon_name"
     fi
 done
 
@@ -143,9 +150,6 @@ done
 # ie. "RawFox" "https://api.github.com/repos/rawfoxDE/raw-wine/releases"
 runner_sources=(
     "LUG" "https://api.github.com/repos/starcitizen-lug/lug-wine/releases"
-    "Kron4ek" "https://api.github.com/repos/Kron4ek/Wine-Builds/releases"
-    "RawFox" "https://api.github.com/repos/starcitizen-lug/raw-wine/releases"
-    "Mactan" "https://api.github.com/repos/mactan-sc/mactan-sc-wine/releases"
 )
 
 ######## DXVK ##############################################################
@@ -156,26 +160,24 @@ dxvk_async_source="https://gitlab.com/api/v4/projects/Ph42oN%2Fdxvk-gplasync/rel
 ######## Requirements ######################################################
 
 # Minimum amount of RAM in GiB
-memory_required="16"
+memory_required="8"
 # Minimum amount of combined RAM + swap in GiB
-memory_combined_required="40"
+memory_combined_required="16"
 
 ######## Links / Versions ##################################################
 
-# LUG Wiki
-lug_wiki="https://wiki.starcitizen-lug.org"
+# BMS Wiki
+bms_wiki="https://wiki.falcon-bms.com"
 
-# NixOS section in Wiki
-lug_wiki_nixos="https://wiki.starcitizen-lug.org/Alternative-Installations#nix-installation"
-
-# RSI Installer version and url
-rsi_installer_base_url="https://install.robertsspaceindustries.com/rel/2"
-rsi_installer_latest_yml="${rsi_installer_base_url}/latest.yml"
+# Falcon 4.0 Installer on GoG
+gog_url="https://www.gog.com/downloads/falcon_gold/61603"
+gog_installer="setup_falcon_4_2.0.0.1.exe"
+bms_installer="Falcon BMS_4.38.1_Full_Setup.exe"
 
 # Github repo and script version info
-repo="starcitizen-lug/lug-helper"
+repo="benchmarksims/bms-helper"
 releases_url="https://github.com/${repo}/releases"
-current_version="v4.5"
+current_version="v1.0"
 
 ############################################################################
 ############################################################################
@@ -256,16 +258,16 @@ debug_print() {
     # Echo the provided string and, optionally, exit the script
     case "$1" in
         "continue")
-            printf "\n%b\n" "$2"
+            printf "\n%s\n" "$2"
             ;;
         "exit")
             # Write an error to stderr and exit
-            printf "lug-helper.sh: %b\n" "$2" 1>&2
+            printf "%s\n" "bms-helper.sh: $2" 1>&2
             read -n 1 -s -p "Press any key..."
             exit 1
             ;;
         *)
-            printf "lug-helper.sh: Unknown argument provided to debug_print function. Aborting.\n" 1>&2
+            printf "%s\n" "bms-helper.sh: Unknown argument provided to debug_print function. Aborting." 1>&2
             read -n 1 -s -p "Press any key..."
             exit 0
             ;;
@@ -328,7 +330,7 @@ message() {
         esac
 
         # Display the message
-        zenity "${margs[@]}""$@" --width="420" --title="Star Citizen LUG Helper"
+        zenity "${margs[@]}""$@" --width="420" --title="Falcon BMS Linux Helper"
     else
         # Fall back to text-based messages when zenity is not available
         case "$1" in
@@ -356,7 +358,7 @@ message() {
             "question")
                 # question
                 # call format: if message question "question to ask?"; then...
-                printf "\n%b\n" "$2"
+                printf "\n%b\n\n" "$2"
                 while read -p "[y/n]: " yn; do
                     case "$yn" in
                         [Yy]*)
@@ -432,7 +434,7 @@ progress_bar() {
         touch "$tmp_dir/zenity_progress_bar_running"
         while [ -f "$tmp_dir/zenity_progress_bar_running" ]; do
             sleep 1
-        done | zenity --progress --pulsate --no-cancel --auto-close --title="Star Citizen LUG Helper" --text="$2" 2>/dev/null &
+        done | zenity --progress --pulsate --no-cancel --auto-close --title="Falcon BMS Linux Helper" --text="$2" 2>/dev/null &
         
         trap 'progress_bar stop' SIGINT # catch sigint to cleanly kill the zenity progress window
     elif [ "$1" = "stop" ]; then
@@ -512,7 +514,7 @@ menu() {
         done
 
         # Display the zenity radio button menu
-        choice="$(zenity --list --"$menu_type" --width="510" --height="$menu_height" --text="$menu_text_zenity" --title="Star Citizen LUG Helper" --hide-header --cancel-label "$cancel_label" --column="" --column="Option" "${zen_options[@]}")"
+        choice="$(zenity --list --"$menu_type" --width="510" --height="$menu_height" --text="$menu_text_zenity" --title="Falcon BMS Linux Helper" --hide-header --cancel-label "$cancel_label" --column="" --column="Option" "${zen_options[@]}")"
 
         # Match up choice with an element in menu_options
         matched="false"
@@ -562,7 +564,7 @@ menu() {
     else
         # Use a text menu if Zenity is not available
         clear
-        printf "\n%b\n\n" "$menu_text_terminal"
+        printf "\n$menu_text_terminal\n\n"
 
         PS3="Enter selection number: "
         select choice in "${menu_options[@]}"
@@ -627,8 +629,8 @@ getdirs() {
     if [ -f "$conf_dir/$conf_subdir/$game_conf" ]; then
         game_path="$(cat "$conf_dir/$conf_subdir/$game_conf")"
         # Note: We check for the parent dir here because the game may not have been fully installed yet
-        # which  means sc_base_dir may not yet have been created. But the parent RSI dir must exist
-        if [ ! -d "$(dirname "$game_path")" ] || [ "$(basename "$game_path")" != "$sc_base_dir" ]; then
+        # which  means bms_base_dir may not yet have been created. But the parent RSI dir must exist
+        if [ ! -d "$(dirname "$game_path")" ] || [ "$(basename "$game_path")" != "$bms_base_dir" ]; then
             debug_print continue "Unexpected game path found in config file, ignoring."
             game_path=""
             rm --interactive=never "${conf_dir:?}/$conf_subdir/$game_conf"
@@ -638,12 +640,12 @@ getdirs() {
     # If we don't have the directory paths we need yet,
     # ask the user to provide them
     if [ -z "$wine_prefix" ] || [ -z "$game_path" ]; then
-        message info "At the next screen, please select the directory where you installed Star Citizen (your Wine prefix)\nIt will be remembered for future use.\n\nDefault install path: ~/Games/star-citizen"
+        message info "At the next screen, please select the directory where you installed Falcon BMS (your Wine prefix)\nIt will be remembered for future use.\n\nDefault install path: ~/Games/falcon-bms"
         if [ "$use_zenity" -eq 1 ]; then
             # Using Zenity file selection menus
             # Get the wine prefix directory
             while [ -z "$wine_prefix" ]; do
-                wine_prefix="$(zenity --file-selection --directory --title="Select your Star Citizen Wine prefix directory" --filename="$HOME/Games/star-citizen" 2>/dev/null)"
+                wine_prefix="$(zenity --file-selection --directory --title="Select your Falcon BMS Wine prefix directory" --filename="$HOME/Games/falcon-bms" 2>/dev/null)"
                 if [ "$?" -eq -1 ]; then
                     message error "An unexpected error has occurred. The Helper is unable to proceed."
                     return 1
@@ -662,11 +664,11 @@ getdirs() {
             if [ -z "$game_path" ]; then
                 if [ -d "$wine_prefix/$default_install_path" ]; then
                     # Default: prefix/drive_c/Program Files/Roberts Space Industries/StarCitizen
-                    game_path="$wine_prefix/$default_install_path/$sc_base_dir"
+                    game_path="$wine_prefix/$default_install_path/$bms_base_dir"
                 else
-                    message info "Unable to detect the default game install path!\n\n$wine_prefix/$default_install_path/$sc_base_dir\n\nDid you change the install location in the RSI Setup?\nDoing that is generally a bad idea but, if you are sure you want to proceed,\nselect your '$sc_base_dir' game directory on the next screen"
+                    message info "Unable to detect the default game install path!\n\n$wine_prefix/$default_install_path/$bms_base_dir\n\nDid you change the install location in the RSI Setup?\nDoing that is generally a bad idea but, if you are sure you want to proceed,\nselect your '$bms_base_dir' game directory on the next screen"
                     while true; do
-                        game_path="$(zenity --file-selection --directory --title="Select your Star Citizen directory" --filename="$wine_prefix/$default_install_path" 2>/dev/null)"
+                        game_path="$(zenity --file-selection --directory --title="Select your Falcon BMS directory" --filename="$wine_prefix/$default_install_path" 2>/dev/null)"
 
                         if [ "$?" -eq -1 ]; then
                             message error "An unexpected error has occurred. The Helper is unable to proceed."
@@ -675,8 +677,8 @@ getdirs() {
                             # User clicked cancel or something else went wrong
                             message warning "Operation cancelled.\nNo changes have been made to your game."
                             return 1
-                        elif [ "$(basename "$game_path")" != "$sc_base_dir" ]; then
-                            message warning "You must select the base game directory named '$sc_base_dir'\n\nie. [prefix]/drive_c/Program Files/Roberts Space Industries/StarCitizen"
+                        elif [ "$(basename "$game_path")" != "$bms_base_dir" ]; then
+                            message warning "You must select the base game directory named '$bms_base_dir'\n\nie. [prefix]/drive_c/Program Files/Roberts Space Industries/StarCitizen"
                         else
                             # All good
                             break
@@ -689,8 +691,8 @@ getdirs() {
             clear
             # Get the wine prefix directory
             if [ -z "$wine_prefix" ]; then
-                printf "Enter the full path to your Star Citizen Wine prefix directory (case sensitive)\n"
-                printf "ie. /home/USER/Games/star-citizen\n"
+                printf "Enter the full path to your Falcon BMS Wine prefix directory (case sensitive)\n"
+                printf "ie. /home/USER/Games/falcon-bms\n"
                 while read -rp ": " wine_prefix; do
                     if [ ! -d "$wine_prefix" ]; then
                         printf "That directory is invalid or does not exist. Please try again.\n\n"
@@ -704,16 +706,16 @@ getdirs() {
             if [ -z "$game_path" ]; then
                 if [ -d "$wine_prefix/$default_install_path/s" ]; then
                     # Default: prefix/drive_c/Program Files/Roberts Space Industries/StarCitizen
-                    game_path="$wine_prefix/$default_install_path/$sc_base_dir"
+                    game_path="$wine_prefix/$default_install_path/$bms_base_dir"
                 else
                     printf "\nUnable to detect the default game install path!\nDid you change the install location in the RSI Setup?\nDoing that is generally a bad idea but, if you are sure you want to proceed...\n\n"
-                    printf "Enter the full path to your %s installation directory (case sensitive)\n" "$sc_base_dir"
-                    printf "ie. /home/USER/Games/star-citizen/drive_c/Program Files/Roberts Space Industries/StarCitizen\n"
+                    printf "Enter the full path to your %s installation directory (case sensitive)\n" "$bms_base_dir"
+                    printf "ie. /home/USER/Games/falcon-bms/drive_c/Program Files/Roberts Space Industries/StarCitizen\n"
                     while read -rp ": " game_path; do
                         if [ ! -d "$game_path" ]; then
                             printf "That directory is invalid or does not exist. Please try again.\n\n"
-                        elif [ "$(basename "$game_path")" != "$sc_base_dir" ]; then
-                            printf "You must enter the full path to the directory named '%s'\n\n" "$sc_base_dir"
+                        elif [ "$(basename "$game_path")" != "$bms_base_dir" ]; then
+                            printf "You must enter the full path to the directory named '%s'\n\n" "$bms_base_dir"
                         else
                             break
                         fi
@@ -743,7 +745,7 @@ getdirs() {
 ############################################################################
 
 # MARK: preflight_check()
-# Check that the system is optimized for Star Citizen
+# Check that the system is optimized for Falcon BMS
 # Accepts an optional string argument, "wine"
 # This argument is used by the install functions to indicate which
 # Preflight Check functions should be called and cause the Preflight Check
@@ -825,7 +827,7 @@ preflight_check() {
         # If install_mode was set by an install function, we won't bother the user when all checks pass
         if [ -z "$install_mode" ]; then
             # All checks pass!
-            message info "$message_heading\n\nYour system is optimized for Star Citizen!\n\n$preflight_pass_string"
+            message info "$message_heading\n\nYour system is optimized for Falcon BMS!\n\n$preflight_pass_string"
         fi
 
         return 0
@@ -941,7 +943,7 @@ avx_check() {
     if grep -q "avx" /proc/cpuinfo; then
         preflight_pass+=("Your CPU supports the necessary AVX instruction set.")
     else
-        preflight_fail+=("Your CPU does not appear to support AVX instructions.\nThis requirement was added to Star Citizen in version 3.11")
+        preflight_fail+=("Your CPU does not appear to support AVX instructions.\nThis requirement was added to Falcon BMS in version 3.11")
     fi
 }
 
@@ -987,11 +989,11 @@ mapcount_check() {
 mapcount_set() {
     if [ -d "/etc/sysctl.d" ]; then
         # Newer versions of sysctl
-        preflight_root_actions+=('printf "\n# Added by LUG-Helper:\nvm.max_map_count = 16777216\n" > /etc/sysctl.d/99-starcitizen-max_map_count.conf && sysctl --quiet --system')
+        preflight_root_actions+=('printf "\n# Added by bms-helper:\nvm.max_map_count = 16777216\n" > /etc/sysctl.d/99-starcitizen-max_map_count.conf && sysctl --quiet --system')
         preflight_fix_results+=("The vm.max_map_count configuration has been added to:\n/etc/sysctl.d/99-starcitizen-max_map_count.conf")
     else
         # Older versions of sysctl
-        preflight_root_actions+=('printf "\n# Added by LUG-Helper:\nvm.max_map_count = 16777216" >> /etc/sysctl.conf && sysctl -p')
+        preflight_root_actions+=('printf "\n# Added by bms-helper:\nvm.max_map_count = 16777216" >> /etc/sysctl.conf && sysctl -p')
         preflight_fix_results+=("The vm.max_map_count configuration has been added to:\n/etc/sysctl.conf")
     fi
 
@@ -1058,12 +1060,12 @@ filelimit_set() {
     if [ -f "/etc/systemd/system.conf" ]; then
         # Using systemd
         # Append to the file
-        preflight_root_actions+=('mkdir -p /etc/systemd/system.conf.d && printf "[Manager]\n# Added by LUG-Helper:\nDefaultLimitNOFILE=524288\n" > /etc/systemd/system.conf.d/99-starcitizen-filelimit.conf && systemctl daemon-reexec')
+        preflight_root_actions+=('mkdir -p /etc/systemd/system.conf.d && printf "[Manager]\n# Added by bms-helper:\nDefaultLimitNOFILE=524288\n" > /etc/systemd/system.conf.d/99-starcitizen-filelimit.conf && systemctl daemon-reexec')
         preflight_fix_results+=("The open files limit configuration has been added to:\n/etc/systemd/system.conf.d/99-starcitizen-filelimit.conf")
     elif [ -f "/etc/security/limits.conf" ]; then
         # Using limits.conf
         # Insert before the last line in the file
-        preflight_root_actions+=('sed -i "\$i#Added by LUG-Helper:" /etc/security/limits.conf; sed -i "\$i* hard nofile 524288" /etc/security/limits.conf')
+        preflight_root_actions+=('sed -i "\$i#Added by bms-helper:" /etc/security/limits.conf; sed -i "\$i* hard nofile 524288" /etc/security/limits.conf')
         preflight_fix_results+=("The open files limit configuration has been appended to:\n/etc/security/limits.conf")
     else
         # Don't know what method to use
@@ -1221,7 +1223,7 @@ runner_manage() {
 
     # Configure the text displayed in the menus
     download_menu_heading="Wine Runners"
-    download_menu_description="The runners listed below are wine builds created for Star Citizen"
+    download_menu_description="The runners listed below are wine builds created for Falcon BMS"
     download_menu_height="320"
 
     # Set the string sed will match against when editing the launch script
@@ -1786,28 +1788,6 @@ post_download() {
 
     # Handle the appropriate post-download actions
     if [ "$post_download_type" = "configure-wine" ]; then
-        # Make sure we can locate the launch script
-        if [ ! -f "$wine_prefix/$wine_launch_script_name" ]; then
-            message warning "Unable to find launch script!\n$wine_prefix/$wine_launch_script_name\n\nYou will need to edit your launch script's \"${post_download_sed_string}\" variable manually."
-            return 1
-        fi
-
-        # Make sure the launch script has the appropriate string to be replaced
-        if ! grep -q "^${post_download_sed_string}" "$wine_prefix/$wine_launch_script_name"; then
-            if message question "Unable to find a required variable in your launch script! It may be out of date.\n\nWould you like to try updating your launch script?"; then
-                # Try updating the launch script
-                update_launch_script
-
-                # Check if the update was successful and we now have the required string
-                if ! grep -q "^${post_download_sed_string}" "$wine_prefix/$wine_launch_script_name"; then
-                    message warning "Unable to find a required variable in your launch script! The update may have failed.\n\nYou will need to edit your launch script's \"${post_download_sed_string}\" variable manually."
-                    return 1
-                fi
-            else
-                message warning "You will need to edit your launch script's \"${post_download_sed_string}\" variable manually."
-                return 1
-            fi
-        fi
 
         # We handle installs and deletions differently
         if [ "$post_download_required" = "installed" ] && [ "$download_type" = "runner" ]; then
@@ -1876,7 +1856,7 @@ download_file() {
         grep --line-buffered -ve "100" | grep --line-buffered -o "[0-9]*\.[0-9]" | \
         (
             trap 'kill "$curlpid"; trap - ERR' ERR
-            zenity --progress --auto-close --title="Star Citizen LUG Helper" --text="Downloading ${download_type}.  This might take a moment.\n" 2>/dev/null
+            zenity --progress --auto-close --title="Falcon BMS Linux Helper" --text="Downloading ${download_type}.  This might take a moment.\n" 2>/dev/null
         )
 
         if [ "$?" -eq 1 ]; then
@@ -1915,27 +1895,27 @@ maintenance_menu() {
         fi
 
         # Configure the menu
-        menu_text_zenity="<b><big>Game Maintenance and Troubleshooting</big>\n\nLUG Wiki: $lug_wiki\n\nWine prefix:</b> $maint_prefix"
-        menu_text_terminal="Game Maintenance and Troubleshooting\n\nLUG Wiki: $lug_wiki\n\nWine prefix: $maint_prefix"
+        menu_text_zenity="<b><big>Game Maintenance and Troubleshooting</big>\n\nBMS Wiki: $bms_wiki\n\nWine prefix:</b> $maint_prefix"
+        menu_text_terminal="Game Maintenance and Troubleshooting\n\nBMS Wiki: $bms_wiki\n\nWine prefix: $maint_prefix"
         menu_text_height="320"
         menu_type="radiolist"
 
         # Configure the menu options
-        prefix_msg="Target a different Star Citizen installation"
+        prefix_msg="Target a different Falcon BMS installation"
         launcher_msg="Update/Repair launch script"
         launchscript_msg="Edit launch script"
         config_msg="Open Wine prefix configuration"
         controllers_msg="Open Wine controller configuration"
         powershell_msg="Install PowerShell into Wine prefix"
-        rsi_launcher_msg="Update/Re-install RSI Launcher"
-        dirs_msg="Display Helper and Star Citizen directories"
+        rsi_launcher_msg="Update/Re-install Falcon BMS"
+        dirs_msg="Display Helper and Falcon BMS directories"
         reset_msg="Reset Helper configs"
         quit_msg="Return to the main menu"
 
         # Set the options to be displayed in the menu
-        menu_options=("$prefix_msg" "$launcher_msg" "$launchscript_msg" "$config_msg" "$controllers_msg" "$powershell_msg" "$rsi_launcher_msg" "$dirs_msg" "$reset_msg" "$quit_msg")
+        menu_options=("$prefix_msg" "$config_msg" "$controllers_msg" "$powershell_msg" "$dirs_msg" "$reset_msg" "$quit_msg")
         # Set the corresponding functions to be called for each of the options
-        menu_actions=("switch_prefix" "update_launch_script" "edit_launch_script" "call_launch_script config" "call_launch_script controllers" "install_powershell" "reinstall_rsi_launcher" "display_dirs" "reset_helper" "menu_loop_done")
+        menu_actions=("switch_prefix" "call_launch_script config" "call_launch_script controllers" "install_powershell" "display_dirs" "reset_helper" "menu_loop_done")
 
         # Calculate the total height the menu should be
         # menu_option_height = pixels per menu option
@@ -1953,14 +1933,14 @@ maintenance_menu() {
 }
 
 # MARK: switch_prefix()
-# Target the Helper at a different Star Citizen prefix/installation
+# Target the Helper at a different Falcon BMS prefix/installation
 switch_prefix() {
     # Check if the config file exists
     if [ -f "$conf_dir/$conf_subdir/$wine_conf" ] && [ -f "$conf_dir/$conf_subdir/$game_conf" ]; then
         getdirs
         # Above will return code 3 if the user had to select new directories. This can happen if the stored directories are now invalid.
         # We check this so we don't prompt the user to set directories twice here.
-        if [ "$?" -ne 3 ] && message question "The Helper is currently targeting this Star Citizen install\nWould you like to change it?\n\n$wine_prefix"; then
+        if [ "$?" -ne 3 ] && message question "The Helper is currently targeting this Falcon BMS install\nWould you like to change it?\n\n$wine_prefix"; then
             reset_helper "switchprefix"
             # Prompt the user for a new set of game paths
             getdirs
@@ -2164,21 +2144,21 @@ install_powershell() {
 }
 
 # MARK: reinstall_rsi_launcher()
-# Download and re-install the latest RSI Launcher into the wine prefix
+# Download and re-install the latest Falcon BMS into the wine prefix
 reinstall_rsi_launcher() {
     # Update directories
     getdirs
 
     if [ "$?" -eq 1 ]; then
         # User cancelled getdirs or there was an error
-        message error "Unable to install or update the RSI Launcher."
+        message error "Unable to install or update the Falcon BMS."
         return 1
     fi
 
-    download_rsi_installer
+    download_gog_installer
     # Abort if the download failed
     if [ "$?" -eq 1 ]; then
-        message error "Unable to install or update the RSI Launcher."
+        message error "Unable to install or update the Falcon BMS."
         return 1
     fi
 
@@ -2195,14 +2175,14 @@ reinstall_rsi_launcher() {
 
     # Set the correct wine prefix
     export WINEPREFIX="$wine_prefix"
-    export WINEDLLOVERRIDES="dxwebsetup.exe,dotNetFx45_Full_setup.exe,winemenubuilder.exe=d"
+    export WINEDLLOVERRIDES=""
 
     # Show a zenity pulsating progress bar
-    progress_bar start "Installing RSI Launcher. Please wait..."
+    progress_bar start "Installing Falcon BMS. Please wait..."
 
     # Run the installer
-    debug_print continue "Installing RSI Launcher. Please wait; this will take a moment..."
-    "$launcher_winepath"/wine "$tmp_dir/$rsi_installer" /S
+    debug_print continue "Installing Falcon BMS. Please wait; this will take a moment..."
+    "$launcher_winepath"/wine "$tmp_dir/$gog_installer" /S
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 58 ]; then
@@ -2219,11 +2199,11 @@ reinstall_rsi_launcher() {
     # Kill the wine process after installation
     "$launcher_winepath"/wineserver -k
 
-    message info "RSI Launcher installation complete!"
+    message info "Falcon BMS installation complete!"
 }
 
 # MARK: display_dirs()
-# Display all directories currently used by this helper and Star Citizen
+# Display all directories currently used by this helper and Falcon BMS
 display_dirs() {
     dirs_list="\n"
 
@@ -2247,18 +2227,18 @@ display_dirs() {
         fi
     fi
 
-    # Star Citizen installation
+    # Falcon BMS installation
     if [ -f "$conf_dir/$conf_subdir/$game_conf" ]; then
         dir_path="$(cat "$conf_dir/$conf_subdir/$game_conf")"
         if [ "$use_zenity" -eq 1 ]; then
-            dirs_list+="Star Citizen game directory:\n<a href='file://$dir_path'>$dir_path</a>\n\n"
+            dirs_list+="Falcon BMS game directory:\n<a href='file://$dir_path'>$dir_path</a>\n\n"
         else
-            dirs_list+="Star Citizen game directory:\n$dir_path\n\n"
+            dirs_list+="Falcon BMS game directory:\n$dir_path\n\n"
         fi
     fi
 
     # Format the info header
-    message_heading="These directories are currently being used by this Helper and Star Citizen"
+    message_heading="These directories are currently being used by this Helper and Falcon BMS"
     if [ "$use_zenity" -eq 1 ]; then
         message_heading="<b>$message_heading</b>"
     fi
@@ -2267,10 +2247,10 @@ display_dirs() {
 }
 
 # MARK: display_wiki()
-# Display the LUG Wiki
+# Display the BMS Wiki
 display_wiki() {
     # Display a message containing the URL
-    message info "See the Wiki for our Quick-Start Guide, Troubleshooting,\nand Performance Tuning Recommendations:\n\n$lug_wiki"
+    message info "See the Wiki for our Quick-Start Guide, Troubleshooting,\nand Performance Tuning Recommendations:\n\n$bms_wiki"
 }
 
 # MARK: reset_helper()
@@ -2540,42 +2520,30 @@ install_dxvk_nvapi() {
 # MARK: install_game()
 # Install the game with Wine
 install_game() {
-    # Check if the install script exists
-    if [ ! -f "$wine_launch_script" ]; then
-        message error "Game launch script not found! Unable to proceed.\n\n$wine_launch_script\n\nIt is included in our official releases here:\n$releases_url"
-        return 1
-    fi
-
     # Call the preflight check and confirm the user is ready to proceed
     preflight_check "wine"
     if [ "$?" -eq 1 ]; then
         # There were errors
-        install_question="Before proceeding, be sure all Preflight Checks have passed!\n\nPlease refer to our Quick Start Guide:\n$lug_wiki\n\nAre you ready to continue?"
+        install_question="Before proceeding, be sure all Preflight Checks have passed!\n\nPlease refer to our Quick Start Guide:\n$bms_wiki\n\nAre you ready to continue?"
     else
         # No errors
-        install_question="Before proceeding, please refer to our Quick Start Guide:\n$lug_wiki\n\nAll Preflight Checks have passed\nAre you ready to continue?"
+        install_question="Before proceeding, please refer to our Quick Start Guide:\n$bms_wiki\n\nAll Preflight Checks have passed\nAre you ready to continue?"
     fi
     if ! message question "$install_question"; then
         return 1
     fi
 
     # Get the install path from the user
-    if message question "Would you like to use the default install path?\n\n$HOME/Games/star-citizen"; then
+    if message question "Would you like to use the default install path?\n\n$HOME/Games/falcon-bms"; then
         # Set the default install path
-        install_dir="$HOME/Games/star-citizen"
-
-        # Make sure we're not installing over an existing prefix
-        if [ -d "$install_dir" ]; then
-            message warning "A directory named \"star-citizen\" already exists!\n\n$install_dir\n\nInstalling over an existing prefix is not recommended.\nIf you need to update or re-install the RSI Launcher, use the option in the Maintenance and Troubleshooting menu."
-            return 0
-        fi
+        install_dir="$HOME/Games/falcon-bms"
     else
         if [ "$use_zenity" -eq 1 ]; then
-            message info "On the next screen, select your Star Citizen install location"
+            message info "On the next screen, select your Falcon BMS install location"
 
             # Get the install path from the user
             while true; do
-                install_dir="$(zenity --file-selection --directory --title="Choose your Star Citizen install directory" --filename="$HOME/" 2>/dev/null)"
+                install_dir="$(zenity --file-selection --directory --title="Choose your Falcon BMS install directory" --filename="$HOME/" 2>/dev/null)"
 
                 if [ "$?" -eq -1 ]; then
                     message error "An unexpected error has occurred. The Helper is unable to proceed."
@@ -2587,13 +2555,13 @@ install_game() {
                 fi
 
                 # Make sure we're not installing over an existing prefix
-                if [ -d "$install_dir/star-citizen" ]; then
-                    message warning "A directory named \"star-citizen\" already exists!\nPlease choose a different install location.\n\n$install_dir"
+                if [ -d "$install_dir/falcon-bms" ]; then
+                    message warning "A directory named \"falcon-bms\" already exists!\nPlease choose a different install location.\n\n$install_dir"
                     continue
                 fi
 
                 # Add the wine prefix subdirectory to the install path
-                install_dir="$install_dir/star-citizen"
+                install_dir="$install_dir/falcon-bms"
 
                 break
             done
@@ -2601,7 +2569,7 @@ install_game() {
             # No Zenity, use terminal-based menus
             clear
             # Get the install path from the user
-            printf "Enter the desired Star Citizen install path (case sensitive)\nie. /home/USER/Games/star-citizen\n\n"
+            printf "Enter the desired Falcon BMS install path (case sensitive)\nie. /home/USER/Games/falcon-bms\n\n"
             while read -rp "Install path: " install_dir; do
                 if [ -z "$install_dir" ]; then
                     printf "Invalid directory. Please try again.\n\n"
@@ -2627,60 +2595,61 @@ install_game() {
     #wine_path="$(command -v wine | xargs dirname)"
 
     #if [ "$system_wine_ok" = "false" ]; then
-    #debug_print continue "Your system Wine does not meet the minimum requirements for Star Citizen!"
+    #debug_print continue "Your system Wine does not meet the minimum requirements for Falcon BMS!"
     #debug_print continue "A custom wine runner will be automatically downloaded and used."
 
-    debug_print continue "Installing a custom wine runner..."
+    #debug_print continue "Installing a custom wine runner..."
 
-    download_dir="$install_dir/runners"
+    #download_dir="$install_dir/runners"
 
     # Install the default wine runner into the prefix
-    download_wine
+    #download_wine
     # Make sure the wine download worked
-    if [ "$?" -eq 1 ]; then
-        message error "Something went wrong while installing ${default_runner}!\nGame installation cannot proceed."
-        return 1
-    fi
+    #if [ "$?" -eq 1 ]; then
+    #    message error "Something went wrong while installing ${default_runner}!\nGame installation cannot proceed."
+    #    return 1
+    #fi
 
-    wine_path="$install_dir/runners/$downloaded_item_name/bin"
+    #wine_path="$install_dir/runners/$downloaded_item_name/bin"
     #fi #### Note: End of previous if statement commented out due to new EAC requirements
 
     # Download winetricks
     download_winetricks
     # Abort if the winetricks download failed
     if [ "$?" -eq 1 ]; then
-        message error "Unable to install Star Citizen without winetricks. Aborting."
+        message error "Unable to install Falcon BMS without winetricks. Aborting."
         return 1
     fi
 
-    download_rsi_installer
+    download_gog_installer
+    download_bms_installer
     # Abort if the download failed
     if [ "$?" -eq 1 ]; then
-        message error "Unable to install Star Citizen. Aborting."
+        message error "Unable to install Falcon BMS. Aborting."
         return 1
     fi
 
     # Create a temporary log file
-    tmp_install_log="$(mktemp --suffix=".log" -t "lughelper-install-XXX")"
+    tmp_install_log="$(mktemp --suffix=".log" -t "bmshelper-install-XXX")"
     debug_print continue "Installation log file created at $tmp_install_log"
 
     # Configure the wine prefix environment
-    export WINE="$wine_path/wine"
-    export WINESERVER="$wine_path/wineserver"
+    #export WINE="$wine_path/wine"
+    #export WINESERVER="$wine_path/wineserver"
     export WINEPREFIX="$install_dir"
-    export WINEDLLOVERRIDES="dxwebsetup.exe,dotNetFx45_Full_setup.exe,winemenubuilder.exe=d"
+    export WINEDLLOVERRIDES=""
 
     # Show a zenity pulsating progress bar
-    progress_bar start "Preparing Wine prefix and installing RSI Launcher. Please wait..."
+    progress_bar start "Preparing Wine prefix and installing Falcon BMS. Please wait..."
 
     # Create the new prefix and install powershell
     debug_print continue "Preparing Wine prefix. Please wait; this will take a moment..."
-    "$winetricks_bin" -q arial tahoma dxvk powershell win11 >"$tmp_install_log" 2>&1
+    "$winetricks_bin" -q corefonts lucida verdana dxvk powershell dotnet8 dotnet48 win11 >"$tmp_install_log" 2>&1
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
         # 126 = permission denied (ie. noexec on /tmp)
-        "$wine_path"/wineserver -k # Kill all wine processes
+        wineserver -k # Kill all wine processes
         progress_bar stop # Stop the zenity progress window
         if message question "Wine prefix creation failed. Aborting installation.\nThe install log was written to\n$tmp_install_log\n\nDo you want to delete\n${install_dir}?"; then
             debug_print continue "Deleting $install_dir..."
@@ -2690,16 +2659,20 @@ install_game() {
     fi
 
     # Add registry key that prevents wine from creating unnecessary file type associations
-    "$wine_path"/wine reg add "HKEY_CURRENT_USER\Software\Wine\FileOpenAssociations" /v Enable /d N /f >>"$tmp_install_log" 2>&1
+    wine reg add "HKEY_CURRENT_USER\Software\Wine\FileOpenAssociations" /v Enable /d N /f >>"$tmp_install_log" 2>&1
 
-    # Run the installer
-    debug_print continue "Installing RSI Launcher. Please wait; this will take a moment..."
-    "$wine_path"/wine "$tmp_dir/$rsi_installer" /S >>"$tmp_install_log" 2>&1
+    # Run the Falcon 4.0 GoG installer
+    debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
+    wine "$SCRIPT_DIR/$gog_installer" /VERYSILENT >>"$tmp_install_log" 2>&1
+
+    # Run the Falcon BMS installer
+    debug_print continue "Installing Falcon BMS. Please wait; this will take a moment..."
+    wine "$SCRIPT_DIR/$bms_installer" /S /16k /noshort >>"$tmp_install_log" 2>&1
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 58 ]; then
         # User cancelled or there was an error
-        "$wine_path"/wineserver -k # Kill all wine processes
+        wineserver -k # Kill all wine processes
         progress_bar stop # Stop the zenity progress window
         if message question "Installation aborted. The install log was written to\n$tmp_install_log\n\nDo you want to delete\n${install_dir}?"; then
             debug_print continue "Deleting $install_dir..."
@@ -2712,13 +2685,13 @@ install_game() {
     progress_bar stop
 
     # Kill the wine process after installation
-    "$wine_path"/wineserver -k
+    wineserver -k
 
     # Save the install location to the Helper's config files
     reset_helper "switchprefix"
     wine_prefix="$install_dir"
     if [ -d "$wine_prefix/$default_install_path" ]; then
-        game_path="$wine_prefix/$default_install_path/$sc_base_dir"
+        game_path="$wine_prefix/$default_install_path/$bms_base_dir"
     fi
     getdirs
 
@@ -2730,34 +2703,18 @@ install_game() {
 
     # Copy game launch script to the wine prefix root directory
     debug_print continue "Copying game launch script to ${install_dir}..."
-    if [ -f "$install_dir/$wine_launch_script_name" ]; then
-        # Back it up if it already exists
-        cp "$install_dir/$wine_launch_script_name" "$install_dir/$(basename "$wine_launch_script_name" .sh).bak"
+
+    # Copy the bundled Falcon BMS icon to the .local icons directory
+    if [ -f "$bms_icon" ]; then
+        mkdir -p "${data_dir}/icons/hicolor/256x256/apps" && 
+        cp "$bms_icon" "${data_dir}/icons/hicolor/256x256/apps"
     fi
-    cp "$wine_launch_script" "$install_dir"
-    installed_launch_script="$install_dir/$wine_launch_script_name"
-
-    # Update WINEPREFIX in game launch script
-    sed -i "s|^export WINEPREFIX=.*|export WINEPREFIX=\"$install_dir\"|" "$installed_launch_script"
-
-    # Update Wine binary in game launch script
-    post_download_sed_string="export wine_path="
-    sed -i "s|^${post_download_sed_string}.*|${post_download_sed_string}\"${wine_path}\"|" "$installed_launch_script"
-
-    # Copy the bundled RSI Launcher icon to the .local icons directory
-    if [ -f "$rsi_icon" ]; then
-        mkdir -p "$data_dir/icons/hicolor/256x256/apps" && 
-        cp "$rsi_icon" "$data_dir/icons/hicolor/256x256/apps"
-    fi
-
-    # Create a "no_win64_warnings" file in the prefix to supress Wine64 warnings
-    touch "${install_dir}/no_win64_warnings"
 
     # Create .desktop files
     create_desktop_files
 
     debug_print continue "Installation finished"
-    message info "Installation has finished. The install log was written to $tmp_install_log\n\nTo start the RSI Launcher, use the following .desktop files:\n     $home_desktop_file\n     $localshare_desktop_file\n\nOr run the following launch script:\n     $installed_launch_script\n\nIMPORTANT!\nThe RSI Launcher will offer to install the game into C:\\\Program Files\\\...\nDo not change the default path!"
+    message info "Installation has finished. The install log was written to $tmp_install_log\n\nTo start the Falcon BMS, use the following .desktop files:\n     $home_desktop_file\n     $localshare_desktop_file\n\nOr run the following launch script:\n     $installed_launch_script\n\nIMPORTANT!\nThe Falcon BMS will offer to install the game into C:\\\Program Files\\\...\nDo not change the default path!"
 }
 
 # MARK: create_desktop_files()
@@ -2772,12 +2729,12 @@ create_desktop_files() {
         debug_print exit "Script error: The string 'wine_prefix' was not set before calling the create_desktop_files function. Aborting."
     fi
 
-    # $HOME/Games/star-citizen/RSI Launcher.desktop
-    prefix_desktop_file="${wine_prefix}/RSI Launcher.desktop"
-    # $HOME/.local/share/applications/RSI Launcher.desktop
-    localshare_desktop_file="${data_dir}/applications/RSI Launcher.desktop"
-    # $HOME/Desktop/RSI Launcher.desktop
-    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/RSI Launcher.desktop"
+    # $HOME/Games/Falcon-BMS/Falcon BMS.desktop
+    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
+    # $HOME/.local/share/applications/Falcon BMS.desktop
+    localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
+    # $HOME/Desktop/Falcon BMS.desktop
+    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
 
     create_desktop_files="true"
     # If the "needed" argument is passed, determine if we need to create system desktop files
@@ -2791,14 +2748,15 @@ create_desktop_files() {
     debug_print continue "Creating ${prefix_desktop_file}..."
     # The backup .desktop file in the prefix directory will always be created so it's up to date
     echo "[Desktop Entry]
-Name=RSI Launcher
+Name=Falcon BMS 4.38 Launcher
 Type=Application
-Comment=RSI Launcher
-Keywords=Star Citizen;StarCitizen
+Comment=Falcon BMS 4.38
+Keywords=Falcon BMS
 StartupNotify=true
-StartupWMClass=rsi launcher.exe
-Icon=rsi-launcher
-Exec=\"${wine_prefix}/${wine_launch_script_name}\"" > "$prefix_desktop_file"
+StartupWMClass=FalconBMS_Alternative_Launcher.exe
+Exec=env WINEPREFIX=\"$install_dir\" wine 'C:\\\\Falcon BMS 4.38\\\\Launcher\\\\FalconBMS_Alternative_Launcher.exe' ''
+Path=$install_dir/drive_c/Falcon BMS 4.38/Launcher/
+Icon=bms-launcher" > "$prefix_desktop_file"
 
     if [ "$create_desktop_files" = "true" ]; then
         debug_print continue "Creating system .desktop files...\n${localshare_desktop_file}\n${home_desktop_file}"
@@ -2901,80 +2859,42 @@ download_winetricks() {
     chmod +x "$winetricks_bin"
 }
 
-# MARK: download_rsi_installer()
-# Downloads the latest RSI setup installer to a temporary file
-download_rsi_installer() {
-    # Fetch the latest RSI installer url
-    set_latest_rsi_installer
-    # Sanity check
-    if [ "$?" -eq 1 ]; then
-        message error "Could not fetch the latest RSI installer! The latest.yml format may have changed or the site is down."
-        return 1
-    fi
+# MARK: download_gog_installer()
+# Opens browser for GOG download, waits for the installer to appear in Downloads, then runs it
+download_gog_installer() {
 
-    # Download RSI installer to tmp
-    download_file "$rsi_installer_url" "$rsi_installer" "installer"
-    # Sanity check
-    if [ ! -f "$tmp_dir/$rsi_installer" ]; then
-        # Something went wrong with the download and the file doesn't exist
-        message error "Something went wrong; the installer could not be downloaded!"
-        return 1
+    local local_gog_installer="$SCRIPT_DIR/$gog_installer"
+
+    #message info "Searching for GOG installer: $SCRIPT_DIR/$gog_installer"
+
+    if [ -f "$local_gog_installer" ]; then
+        message info "GOG Falcon 4.0 installer found..."
+    else
+        message info "Opening your browser to download Falcon 4.0 from GOG..."
+        if command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$gog_url" >/dev/null 2>&1 &
+        elif command -v open >/dev/null 2>&1; then
+            open "$gog_url" >/dev/null 2>&1 &
+        else
+            message error "Could not open a web browser. Please visit $gog_url manually."
+            exit 1
+        fi
+        message info "Please now place $gog_installer in the BMS helper script root folder. Only close this message once done..."
     fi
 }
 
-# MARK: get_current_runner()
-# Get the wine runner path from the sc-launch.sh script
-# It's expected that getdirs has already been called by the calling function to populate directory variables
-get_current_runner() {
-    # Make sure we can find the launch script
-    if [ ! -f "$wine_prefix/$wine_launch_script_name" ]; then
-        message warning "Unable to find launch script!\n$wine_prefix/$wine_launch_script_name"
+# MARK: download_bms_installer()
+# Opens browser for GOG download, waits for the installer to appear in Downloads, then runs it
+download_bms_installer() {
+
+    local local_bms_installer="$SCRIPT_DIR/$bms_installer"
+
+    if [ -f "$local_bms_installer" ]; then
+        message info "Falcon BMS Installer found..."
+    else
+        message error "Falcon BMS Installer not found..."
         return 1
     fi
-
-    # Get the current wine runner path from the launch script
-    launcher_winepath="$(grep -e "^export wine_path=" -e "^wine_path=" "$wine_prefix/$wine_launch_script_name" | awk -F '=' '{print $2}' | tr -d '"')"
-
-    # Double check that we found a path in the launch script
-    if [ -z "$launcher_winepath" ]; then
-        message warning "Unable to find the current wine runner in your launch script!\n$wine_prefix/$wine_launch_script_name"
-        return 1
-    fi
-
-    # Remove the last /bin directory from the path to get the runner directory
-    current_runner_path="$(dirname "$launcher_winepath")"
-    # Get the runner filename, not including its file extension
-    current_runner_basename="$(basename "$current_runner_path")"
-}
-
-# MARK: set_latest_rsi_installer()
-# Fetch and store variables for the latest RSI installer filename and url
-set_latest_rsi_installer() {
-    # Fetch the yml and parse it for the latest filename
-    # ie. RSI Launcher-Setup-2.9.0.exe
-    rsi_installer="$(curl -s "$rsi_installer_latest_yml" | grep -Eo "url:.+" | sed 's/url:[[:space:]]*//')"
-
-    if [ -z "$rsi_installer" ]; then
-        return 1
-    fi
-
-    rsi_installer_url="${rsi_installer_base_url}/${rsi_installer}"
-}
-
-# MARK: set_latest_default_runner()
-# Fetch and store variables for the latest default wine runner filename
-set_latest_default_runner() {
-    default_runner_file="$(curl -s https://api.github.com/repos/starcitizen-lug/lug-wine/releases/latest | grep -Eo "\"browser_download_url\": ?\"[^\"]+\"" | grep -vie "staging" | cut -d '"' -f4 | xargs basename)"
-
-    if [ -z "$default_runner_file" ]; then
-        return 1
-    fi
-
-    # Store the filename without the file extension
-    default_runner="$(basename "$default_runner_file" .tar.gz)"
-
-    # Set the runner_sources array index which points to the default runner source api url (must be an even number in the array, arrays start with 0)
-    default_runner_source=0
 }
 
 # MARK: set_latest_winetricks()
@@ -3005,21 +2925,8 @@ get_latest_release() {
 format_urls() {
     if [ "$use_zenity" -eq 1 ]; then
         releases_url="<a href='$releases_url'>$releases_url</a>"
-        lug_wiki="<a href='$lug_wiki'>$lug_wiki</a>"
-        lug_wiki_nixos="<a href='$lug_wiki_nixos'>$lug_wiki_nixos</a>"
+        bms_wiki="<a href='$bms_wiki'>$bms_wiki</a>"
     fi
-}
-
-# MARK: referral_randomizer()
-# Get a random Penguin's Star Citizen referral code
-referral_randomizer() {
-    # Populate the referral codes array
-    referral_codes=("STAR-4TZD-6KMM" "STAR-4XM2-VM99" "STAR-2NPY-FCR2" "STAR-T9Z9-7W6P" "STAR-VLBF-W2QR" "STAR-BYR6-YHMF" "STAR-3X2H-VZMX" "STAR-BRWN-FB9T" "STAR-FG6Y-N4Q4" "STAR-VLD6-VZRG" "STAR-T9KF-LV77" "STAR-4XHB-R7RF" "STAR-9NVF-MRN7" "STAR-3Q4W-9TC3" "STAR-3SBK-7QTT" "STAR-XFBT-9TTK" "STAR-F3H9-YPHN" "STAR-BYK6-RCCL" "STAR-XCKH-W6T7" "STAR-H292-39WK" "STAR-ZRT5-PJB7" "STAR-GMBP-SH9Y" "STAR-PLWB-LMFY" "STAR-TNZN-H4ZT" "STAR-T5G5-L2GJ" "STAR-6TPV-7QH2" "STAR-THHD-TV3Y" "STAR-7ZFS-PK2L" "STAR-SRQN-43TB" "STAR-9TDG-D4H9" "STAR-BPH3-THJC" "STAR-HL3M-R5KC" "STAR-GBS5-LTVB" "STAR-CJ3Y-KZZ4" "STAR-5GRM-7HBY" "STAR-G2GX-Y2QJ" "STAR-YWY3-H4XX" "STAR-6VGM-PTKC" "STAR-T6MZ-QFHX" "STAR-T2K6-LXFW" "STAR-XN25-9CJJ" "STAR-47V3-4QGB" "STAR-YD4Z-TQZV" "STAR-XLN7-9XNJ" "STAR-N62T-2R39" "STAR-3S3D-9HXQ" "STAR-TRZF-NMCV" "STAR-TLLJ-SMG4" "STAR-MFT6-Q44H" "STAR-TZX2-TPWF" "STAR-WCHN-4ZMX" "STAR-2GHY-WB4F" "STAR-KLM2-R4SX" "STAR-RYXQ-PBZB" "STAR-BSTC-NQPW" "STAR-X32P-J2NS" "STAR-9DMZ-CXWW" "STAR-ZDC2-TDP9" "STAR-J3PJ-RH2K" "STAR-Q6QW-5CC4" "STAR-FLVX-2KGT")
-    # Pick a random array element. Scale a floating point number for
-    # a more random distribution than simply calling RANDOM
-    random_code="${referral_codes[$(awk '{srand($2); print int(rand()*$1)}' <<< "${#referral_codes[@]} $RANDOM")]}"
-
-    message info "Your random Penguin's referral code is:\n\n$random_code\n\nThank you!"
 }
 
 # MARK: quit()
@@ -3080,14 +2987,14 @@ if [ "$#" -eq 0 ]; then
 fi
 
 # Check if a newer verison of the script is available
-latest_version="$(get_latest_release "$repo")"
+#latest_version="$(get_latest_release "$repo")"
 
 # Sort the versions and check if the installed Helper is smaller
-if [ "$latest_version" != "$current_version" ] &&
-   [ "$current_version" = "$(printf "%s\n%s" "$current_version" "$latest_version" | sort -V | head -n1)" ]; then
-
-    message info "The latest version of the LUG Helper is $latest_version\nYou are using $current_version\n\nYou can download new releases here:\n$releases_url"
-fi
+#if [ "$latest_version" != "$current_version" ] &&
+#   [ "$current_version" = "$(printf "%s\n%s" "$current_version" "$latest_version" | sort -V | head -n1)" ]; then
+#
+#    message info "The latest version of the BMS Helper is $latest_version\nYou are using $current_version\n\nYou can download new releases here:\n$releases_url"
+#fi
 
 # MARK: Cmdline arguments
 # If invoked with command line arguments, process them and exit
@@ -3097,21 +3004,17 @@ if [ "$#" -gt 0 ]; then
         # Victor_Tramp expects the spanish inquisition.
         case "$1" in
             --help | -h )
-                printf "Star Citizen Linux Users Group Helper Script
-Usage: lug-helper <options>
+                printf "Falcon BMS Linux Users Group Helper Script
+Usage: bms-helper <options>
   -p, --preflight-check         Run system optimization checks
-  -i, --install                 Install Star Citizen
-  -m, --manage-runners          Install or remove Wine runners
-  -k, --manage-dxvk             Manage DXVK in the Wine prefix
+  -i, --install                 Install Falcon BMS
   -u, --update-launch-script    Update/Repair the game launch script
   -e, --edit-launch-script      Edit the game launch script
   -c, --wine-config             Launch winecfg for the game's prefix
   -j, --wine-controllers        Launch Wine controllers configuration
-  -l, --update-rsi-launcher     Update/Re-install RSI Launcher
-  -r, --get-referral            Get a random LUG member's referral code
-  -d, --show-directories        Show all Star Citizen and Helper directories
-  -w, --show-wiki               Show the LUG Wiki
-  -x, --reset-helper            Delete saved lug-helper configs
+  -d, --show-directories        Show all Falcon BMS and Helper directories
+  -w, --show-wiki               Show the BMS Wiki
+  -x, --reset-helper            Delete saved bms-helper configs
   -g, --no-gui                  Use terminal menus instead of a Zenity GUI
   -v, --version                 Display version info and exit
 "
@@ -3122,12 +3025,6 @@ Usage: lug-helper <options>
                 ;;
             --install | -i )
                 cargs+=("install_game")
-                ;;
-            --manage-runners | -m )
-                cargs+=("runner_manage")
-                ;;
-            --manage-dxvk | -k )
-                cargs+=("dxvk_menu")
                 ;;
             --update-launch-script | -u )
                 cargs+=("update_launch_script")
@@ -3140,12 +3037,6 @@ Usage: lug-helper <options>
                 ;;
             --wine-controllers | -j )
                 cargs+=("call_launch_script controllers")
-                ;;
-            --update-rsi-launcher | -l )
-                cargs+=("reinstall_rsi_launcher")
-                ;;
-            --get-referral | -r )
-                cargs+=("referral_randomizer")
                 ;;
             --show-directories | -d )
                 cargs+=("display_dirs")
@@ -3162,7 +3053,7 @@ Usage: lug-helper <options>
                 use_zenity=0
                 ;;
             --version | -v )
-                printf "LUG Helper %s\n" "$current_version"
+                printf "BMS Helper %s\n" "$current_version"
                 exit 0
                 ;;
             * )
@@ -3187,18 +3078,13 @@ Usage: lug-helper <options>
     fi
 fi
 
-# Detect if NixOS is being used and direct user to wiki
-if (grep -q '^NAME=NixOS' /etc/os-release 2> /dev/null ); then
-    message info "It looks like you're using NixOS\nPlease see our wiki for NixOS-specific configuration requirements:\n\n$lug_wiki_nixos"
-fi
-
 # Set up the main menu heading
-menu_heading_zenity="<b><big>Greetings, Space Penguin!</big>\n\nThis tool is provided by the Star Citizen Linux Users Group</b>\nFor help, see our wiki: $lug_wiki"
-menu_heading_terminal="Greetings, Space Penguin!\n\nThis tool is provided by the Star Citizen Linux Users Group\nFor help, see our wiki: $lug_wiki"
+menu_heading_zenity="<b><big>Welcome Pilot!</big>\n\nThis tool is provided by the Falcon BMS</b>\nFor help, see our wiki: $bms_wiki"
+menu_heading_terminal="Welcome Pilot!\n\nThis tool is provided by the Falcon BMS\nFor help, see our wiki: $bms_wiki"
 
 # MARK: First Run
 # First run
-firstrun_message="It looks like this is your first time running the Helper\n\nWould you like to run the Preflight Check and install Star Citizen?"
+firstrun_message="It looks like this is your first time running the Helper\n\nWould you like to run the Preflight Check and install Falcon BMS?"
 if [ "$use_zenity" -eq 1 ]; then
     firstrun_message="$menu_heading_zenity\n\n$firstrun_message"
 else
@@ -3226,17 +3112,17 @@ while true; do
 
     # Configure the menu options
     preflight_msg="Preflight Check (System Optimization)"
-    install_msg_wine="Install Star Citizen"
-    runners_msg_wine="Manage Wine Runners"
+    install_msg_wine="Install Falcon BMS"
+    #runners_msg_wine="Manage Wine Runners"
     dxvk_msg_wine="Manage DXVK"
     maintenance_msg="Maintenance and Troubleshooting"
-    randomizer_msg="Get a random Penguin's Star Citizen referral code"
+    #randomizer_msg="Get a random Penguin's Falcon BMS referral code"
     quit_msg="Quit"
 
     # Set the options to be displayed in the menu
-    menu_options=("$preflight_msg" "$install_msg_wine" "$runners_msg_wine" "$dxvk_msg_wine" "$maintenance_msg" "$randomizer_msg" "$quit_msg")
+    menu_options=("$preflight_msg" "$install_msg_wine" "$maintenance_msg" "$quit_msg")
     # Set the corresponding functions to be called for each of the options
-    menu_actions=("preflight_check" "install_game" "runner_manage" "dxvk_menu" "maintenance_menu" "referral_randomizer" "quit")
+    menu_actions=("preflight_check" "install_game" "maintenance_menu" "quit")
 
     # Calculate the total height the menu should be
     # menu_option_height = pixels per menu option
