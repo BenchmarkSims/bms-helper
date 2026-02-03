@@ -2859,16 +2859,33 @@ install_game() {
 
     # Run the Falcon BMS installer
     debug_print continue "Installing Falcon BMS. Please wait; this will take a moment..."
-    # Determine tiles argument
-    if [ "${use_16k_tiles:-1}" = "1" ]; then
+    # Determine tiles argument (default: opt-out unless user explicitly chose)
+    if [ "${use_16k_tiles:-0}" = "1" ]; then
         tiles_arg="/16k"
     else
         tiles_arg=""
     fi
-    if [ -n "$selected_bms_installer" ]; then
-        wine "$selected_bms_installer" /S $tiles_arg /noshort >>"$tmp_install_log" 2>&1
+    # Determine key argument (for internal installers)
+    if [ -n "${bms_key:-}" ]; then
+        key_arg="/key=${bms_key}"
     else
-        wine "$SCRIPT_DIR/$bms_installer" /S $tiles_arg /noshort >>"$tmp_install_log" 2>&1
+        key_arg=""
+    fi
+    # Build installer argument array to avoid passing empty/split parameters
+    installer_args=("/S")
+    installer_args+=("/noshort")
+    if [ -n "$tiles_arg" ]; then
+        installer_args+=("$tiles_arg")
+    fi
+    if [ -n "$key_arg" ]; then
+        installer_args+=("$key_arg")
+    fi
+    
+
+    if [ -n "$selected_bms_installer" ]; then
+        wine "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
+    else
+        wine "$SCRIPT_DIR/$bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
     fi
 
     exit_code="$?"
@@ -3158,6 +3175,22 @@ download_bms_installer() {
             else
                 use_16k_tiles=0
             fi
+            # If we're in internal mode, prompt for an internal installation key
+            bms_key=""
+            if [ "$bms_mode" = "internal" ]; then
+                if [ "$use_zenity" -eq 1 ]; then
+                    bms_key="$(zenity --entry --title="Falcon BMS Internal Key" --text="Enter internal installation key (leave blank to skip):" --entry-text="" 2>/dev/null)"
+                    # treat cancel as empty
+                    if [ $? -ne 0 ]; then
+                        bms_key=""
+                    fi
+                else
+                    printf "Enter internal installation key (optional): "
+                    read -r bms_key
+                fi
+                # Trim whitespace
+                bms_key="$(echo "$bms_key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            fi
             return 0
         else
             message error "Specified installer not found: $installer_path"
@@ -3230,8 +3263,22 @@ download_bms_installer() {
     else
         use_16k_tiles=0
     fi
+    # If we're in internal mode, prompt for an internal installation key
+    bms_key=""
+    if [ "$bms_mode" = "internal" ]; then
+        if [ "$use_zenity" -eq 1 ]; then
+            bms_key="$(zenity --entry --title="Falcon BMS Internal Key" --text="Enter internal installation key (leave blank to skip):" --entry-text="" 2>/dev/null)"
+            if [ $? -ne 0 ]; then
+                bms_key=""
+            fi
+        else
+            printf "Enter internal installation key (optional): "
+            read -r bms_key
+        fi
+        bms_key="$(echo "$bms_key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    fi
     # Don't show a popup on successful selection to reduce interruptions
-    debug_print continue "Falcon BMS installer selected: $selected_bms_installer (use_16k_tiles=$use_16k_tiles)"
+    debug_print continue "Falcon BMS installer selected: $selected_bms_installer (use_16k_tiles=$use_16k_tiles bms_key=$bms_key)"
     return 0
 }
 
