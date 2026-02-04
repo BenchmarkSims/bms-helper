@@ -83,18 +83,80 @@ wine_conf="winedir.conf"
 game_conf="gamedir.conf"
 firstrun_conf="firstrun.conf"
 
+# Falcon BMS directory name and default install path (use variables instead of repeated literals)
+# Default to public release. This may be switched to "internal" if an
+# internal installer is detected or explicitly provided by the user.
+bms_mode="public" # one of: public|internal
+
+# We'll initialize the install-related names via the helper function
+# `set_bms_mode` so a supplied installer path can flip settings.
+
+# Populate names for the chosen mode
+set_bms_mode() {
+    case "$1" in
+        internal)
+            bms_mode="internal"
+            bms_dirname="falcon-bms-internal"
+            bms_default_install_path="$HOME/Games/$bms_dirname"
+            conf_subdir="falcon-bms-internal"
+            bms_base_dir="Falcon BMS 4.38 (Internal)"
+            bms_installer="Falcon BMS_4.38.1_Internal_Full_Setup.exe"
+            bms_wiki="https://wiki.benchmarksims.org"
+            ;;
+        *)
+            bms_mode="public"
+            bms_dirname="falcon-bms"
+            bms_default_install_path="$HOME/Games/$bms_dirname"
+            conf_subdir="falcon-bms"
+            bms_base_dir="Falcon BMS 4.38"
+            bms_installer="Falcon BMS_4.38.0_Full_Setup.exe"
+            bms_wiki="https://wiki.falcon-bms.com"
+            ;;
+    esac
+}
+
+# initialize defaults
+set_bms_mode "$bms_mode"
+
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+# Path to bundled icon
+bms_icon="$SCRIPT_DIR/bms-launcher.png"
 
 # Use XDG base directories if defined
 if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs" ]; then
     # Source the user's xdg directories
     source "${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs"
 fi
+# configuration directories
 conf_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 
-# .config subdirectory
-conf_subdir="bms-helper"
+# Startup: detect existing internal config and offer to restart in internal mode
+internal_conf_dir="$conf_dir/falcon-bms-internal"
+has_internal_arg=0
+for _arg in "$@"; do
+    case "$_arg" in
+        --internal)
+            has_internal_arg=1
+            break
+            ;;
+    esac
+done
+if [ -d "$internal_conf_dir" ] && [ "$bms_mode" != "internal" ] && [ "$has_internal_arg" -eq 0 ]; then
+    if [ -x "$(command -v zenity)" ]; then
+        if zenity --question --width=420 --title="Falcon BMS Linux Helper" --text="A configuration for 'falcon-bms-internal' was detected at\n\n$internal_conf_dir\n\nRestart helper in internal mode?"; then
+            exec "$0" --internal "$@"
+        fi
+    else
+        printf "A configuration for 'falcon-bms-internal' was detected at %s\n\nRestart helper in internal mode? [y/N]: " "$internal_conf_dir"
+        read -r ans
+        case "$ans" in
+            y|Y|yes|Yes|YES)
+                exec "$0" --internal "$@"
+                ;;
+        esac
+    fi
+fi
 
 # Helper directory
 helper_dir="$(realpath "$0" | xargs -0 dirname)"
@@ -103,45 +165,66 @@ helper_dir="$(realpath "$0" | xargs -0 dirname)"
 tmp_dir="$(mktemp -d -t "bmshelper.XXXXXXXXXX")"
 trap 'rm -r --interactive=never "$tmp_dir"' EXIT
 
-# Set a maximum number of versions to display from each download url
-max_download_items=25
+# Installer detection
+# User can point to an installer with the environment variable `BMS_INSTALLER`
+# or the command-line option `--installer /path/to/installer.exe`.
+installer_path=""
 
-######## Game Directories ##################################################
+detect_installer_from_path() {
+    # Argument: path to installer (may be a filename)
+    local p="$1"
+    if [ -z "$p" ]; then
+        return 1
+    fi
+    local bn="$(basename "$p")"
+    local lbn="$(echo "$bn" | tr '[:upper:]' '[:lower:]')"
 
-# The game's base directory name
-bms_base_dir="Falcon BMS 4.38"
-# The default install location within a WINE prefix:
-default_install_path="drive_c"
-
-# Remaining directory paths are set at the end of the getdirs() function
-
-######## Bundled Files #####################################################
-
-bms_icon_name="bms-launcher.png"
-wine_launch_script_name="bms-launch.sh"
-
-# Default to files in the Helper directory for a git download
-bms_icon="$helper_dir/$bms_icon_name"
-wine_launch_script="$helper_dir/lib/$wine_launch_script_name"
-
-# Build our array of search paths, supporting packaged versions of this script
-# Search XDG_DATA_DIRS and fall back to /usr/share/
-IFS=':' read -r -a data_dirs_array <<< "$XDG_DATA_DIRS:/usr/share/"
-
-# Locate our files in the search array
-for searchdir in "${data_dirs_array[@]}"; do
-    # Check if we've found all our files and break the loop
-    if [ -f "$bms_icon" ] && [ -f "$wine_launch_script" ]; then
-        break
+    # Heuristic: filenames containing 'internal' indicate internal builds
+    if echo "$lbn" | grep -qi "internal"; then
+        set_bms_mode internal
+        return 0
     fi
 
-    # bms-launcher.png
-    if [ ! -f "$bms_icon" ] && [ -f "$searchdir/icons/hicolor/256x256/apps/$bms_icon_name" ]; then
-        bms_icon="$searchdir/icons/hicolor/256x256/apps/$bms_icon_name"
-    fi
+    # Fallback: default to public
+    set_bms_mode public
+    return 0
+}
+
+# Parse a simple CLI args: --installer, --internal, --public
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --installer)
+            installer_path="$2"
+            shift 2
+            ;;
+        --installer=*)
+            installer_path="${1#--installer=}"
+            shift
+            ;;
+        --internal)
+            set_bms_mode internal
+            shift
+            ;;
+        --public)
+            set_bms_mode public
+            shift
+            ;;
+        *)
+            # stop parsing on first non-recognized option
+            break
+            ;;
+    esac
 done
 
-######## Runners ###########################################################
+# honor environment variable if set and CLI not provided
+if [ -z "$installer_path" ] && [ -n "$BMS_INSTALLER" ]; then
+    installer_path="$BMS_INSTALLER"
+fi
+
+# If we have an installer path, try to detect internal vs public and set names
+if [ -n "$installer_path" ]; then
+    detect_installer_from_path "$installer_path"
+fi
 
 # URLs for downloading Wine runners
 # Elements in this array must be added in quoted pairs of: "description" "url"
@@ -166,13 +249,17 @@ memory_combined_required="16"
 
 ######## Links / Versions ##################################################
 
-# BMS Wiki
-bms_wiki="https://wiki.falcon-bms.com"
+# BMS Wiki (only set if not already configured by detected installer mode)
+if [ -z "$bms_wiki" ]; then
+    bms_wiki="https://wiki.falcon-bms.com"
+fi
 
 # Falcon 4.0 Installer on GoG
 gog_url="https://www.gog.com/downloads/falcon_gold/61603"
 gog_installer="setup_falcon_4_2.0.0.1.exe"
-bms_installer="Falcon BMS_4.38.1_Full_Setup.exe"
+if [ -z "$bms_installer" ]; then
+    bms_installer="Falcon BMS_4.38.0_Full_Setup.exe"
+fi
 
 # Github repo and script version info
 repo="benchmarksims/bms-helper"
@@ -430,19 +517,74 @@ progress_bar() {
             return 0
         fi
 
-        # Show a zenity pulsating progress bar and use a temp file to track it inside the subshell
-        touch "$tmp_dir/zenity_progress_bar_running"
-        while [ -f "$tmp_dir/zenity_progress_bar_running" ]; do
-            sleep 1
-        done | zenity --progress --pulsate --no-cancel --auto-close --title="Falcon BMS Linux Helper" --text="$2" 2>/dev/null &
-        
+        fifo="$tmp_dir/zenity_progress_fifo"
+        pidfile="$tmp_dir/zenity_progress_bar_pid"
+        runningflag="$tmp_dir/zenity_progress_bar_running"
+
+        # Ensure no stale FIFO remains
+        rm -f "$fifo" "$pidfile" 2>/dev/null || true
+        mkfifo "$fifo" 2>/dev/null || {
+            debug_print continue "Failed to create progress FIFO. Falling back to old progress behavior."
+            touch "$runningflag"
+            while [ -f "$runningflag" ]; do
+                sleep 1
+            done | zenity --progress --pulsate --no-cancel --auto-close --title="Falcon BMS Linux Helper" --text="$2" 2>/dev/null &
+            trap 'progress_bar stop' SIGINT
+            return 0
+        }
+
+        # Start zenity reading from the FIFO and keep a writable FD (3) open so other functions can write updates
+        zenity --progress --pulsate --no-cancel --auto-close --title="Falcon BMS Linux Helper" --text="$2" < "$fifo" 2>/dev/null &
+        echo "$!" > "$pidfile"
+
+        # Open a write descriptor to the FIFO for updates (fd 3)
+        exec 3>"$fifo" || true
+        # Send initial text
+        printf "# %s\n" "$2" >&3 2>/dev/null || true
+
+        touch "$runningflag"
         trap 'progress_bar stop' SIGINT # catch sigint to cleanly kill the zenity progress window
     elif [ "$1" = "stop" ]; then
-        # Stop the zenity progress window
-        rm --interactive=never "$tmp_dir/zenity_progress_bar_running" 2>/dev/null
+        fifo="$tmp_dir/zenity_progress_fifo"
+        pidfile="$tmp_dir/zenity_progress_bar_pid"
+        runningflag="$tmp_dir/zenity_progress_bar_running"
+
+        # Stop the zenity progress window: close fd3, remove fifo and flag, and kill zenity if still running
+        if [ -e /proc/$$/fd/3 ]; then
+            exec 3>&- || true
+        fi
+        if [ -f "$pidfile" ]; then
+            zenity_pid=$(cat "$pidfile" 2>/dev/null)
+            if [ -n "$zenity_pid" ] && kill -0 "$zenity_pid" 2>/dev/null; then
+                kill "$zenity_pid" 2>/dev/null || true
+            fi
+            rm -f "$pidfile" 2>/dev/null || true
+        fi
+        rm --interactive=never "$runningflag" 2>/dev/null
+        rm -f "$fifo" 2>/dev/null || true
         trap - SIGINT # Remove the trap
     else
         debug_print exit "Script error:  The progress_bar function expects either 'start' or 'stop' as the first argument. Aborting."
+    fi
+}
+
+# MARK: progress_update()
+# Write a step/message to the existing zenity progress window. Accepts a single string.
+progress_update() {
+    if [ "$use_zenity" -eq 0 ]; then
+        return 0
+    fi
+    if [ -z "$1" ]; then
+        return 0
+    fi
+    fifo="$tmp_dir/zenity_progress_fifo"
+    # Try writing to fd 3 first, fall back to writing directly to the FIFO
+    if [ -e /proc/$$/fd/3 ]; then
+        printf "# %s\n" "$1" >&3 2>/dev/null || true
+        return 0
+    fi
+    if [ -p "$fifo" ]; then
+        printf "# %s\n" "$1" > "$fifo" 2>/dev/null &
     fi
 }
 
@@ -564,7 +706,9 @@ menu() {
     else
         # Use a text menu if Zenity is not available
         clear
-        printf "\n$menu_text_terminal\n\n"
+        # Print the terminal menu text without an extra leading blank line.
+        # Use %b so embedded \n sequences in the text are interpreted.
+        printf "%b\n\n" "$menu_text_terminal"
 
         PS3="Enter selection number: "
         select choice in "${menu_options[@]}"
@@ -599,6 +743,22 @@ menu() {
 # Causes a return to the main menu
 menu_loop_done() {
     looping_menu="false"
+}
+
+# Remove the config subdir if it contains only the firstrun marker
+cleanup_conf_if_only_firstrun() {
+    target_dir="$conf_dir/$conf_subdir"
+    if [ -d "$target_dir" ]; then
+        # gather non-hidden entries
+        shopt -s nullglob
+        entries=("$target_dir"/*)
+        shopt -u nullglob
+        if [ "${#entries[@]}" -eq 1 ]; then
+            if [ "$(basename "${entries[0]}")" = "$firstrun_conf" ]; then
+                rm -r --interactive=never "$target_dir"
+            fi
+        fi
+    fi
 }
 
 # MARK: getdirs()
@@ -640,12 +800,12 @@ getdirs() {
     # If we don't have the directory paths we need yet,
     # ask the user to provide them
     if [ -z "$wine_prefix" ] || [ -z "$game_path" ]; then
-        message info "At the next screen, please select the directory where you installed Falcon BMS (your Wine prefix)\nIt will be remembered for future use.\n\nDefault install path: ~/Games/falcon-bms"
+        message info "At the next screen, please select the directory where you installed Falcon BMS (your Wine prefix)\nIt will be remembered for future use.\n\nDefault install path: $bms_default_install_path"
         if [ "$use_zenity" -eq 1 ]; then
             # Using Zenity file selection menus
             # Get the wine prefix directory
             while [ -z "$wine_prefix" ]; do
-                wine_prefix="$(zenity --file-selection --directory --title="Select your Falcon BMS Wine prefix directory" --filename="$HOME/Games/falcon-bms" 2>/dev/null)"
+                wine_prefix="$(zenity --file-selection --directory --title="Select your Falcon BMS Wine prefix directory" --filename="$bms_default_install_path" 2>/dev/null)"
                 if [ "$?" -eq -1 ]; then
                     message error "An unexpected error has occurred. The Helper is unable to proceed."
                     return 1
@@ -692,7 +852,7 @@ getdirs() {
             # Get the wine prefix directory
             if [ -z "$wine_prefix" ]; then
                 printf "Enter the full path to your Falcon BMS Wine prefix directory (case sensitive)\n"
-                printf "ie. /home/USER/Games/falcon-bms\n"
+                printf "ie. %s\n" "$bms_default_install_path"
                 while read -rp ": " wine_prefix; do
                     if [ ! -d "$wine_prefix" ]; then
                         printf "That directory is invalid or does not exist. Please try again.\n\n"
@@ -710,7 +870,7 @@ getdirs() {
                 else
                     printf "\nUnable to detect the default game install path!\nDid you change the install location in the RSI Setup?\nDoing that is generally a bad idea but, if you are sure you want to proceed...\n\n"
                     printf "Enter the full path to your %s installation directory (case sensitive)\n" "$bms_base_dir"
-                    printf "ie. /home/USER/Games/falcon-bms/drive_c/Program Files/Roberts Space Industries/StarCitizen\n"
+                    printf "ie. %s/drive_c/Program Files/Roberts Space Industries/StarCitizen\n" "$bms_default_install_path"
                     while read -rp ": " game_path; do
                         if [ ! -d "$game_path" ]; then
                             printf "That directory is invalid or does not exist. Please try again.\n\n"
@@ -729,6 +889,28 @@ getdirs() {
     fi
 
     # Save the paths to config files
+    # If the selected game path implies a different BMS mode (internal vs public),
+    # offer to switch modes so we use the correct config subdir.
+    if [ -n "$game_path" ]; then
+        selected_base="$(basename "$game_path")"
+        if [ "$selected_base" = "Falcon BMS 4.38 (Internal)" ] && [ "$bms_mode" != "internal" ]; then
+            if message question "You selected an internal Falcon BMS installation:\n\n$game_path\n\nbut the Helper is in public mode. Switch to internal mode and use the 'falcon-bms-internal' config folder?"; then
+                set_bms_mode internal
+                # ensure the new config subdir exists
+                if [ ! -d "$conf_dir/$conf_subdir" ]; then
+                    mkdir -p "$conf_dir/$conf_subdir"
+                fi
+            fi
+        elif [ "$selected_base" = "Falcon BMS 4.38" ] && [ "$bms_mode" = "internal" ]; then
+            if message question "You selected a public Falcon BMS installation:\n\n$game_path\n\nbut the Helper is in internal mode. Switch to public mode and use the 'falcon-bms' config folder?"; then
+                set_bms_mode public
+                if [ ! -d "$conf_dir/$conf_subdir" ]; then
+                    mkdir -p "$conf_dir/$conf_subdir"
+                fi
+            fi
+        fi
+    fi
+
     if [ ! -f "$conf_dir/$conf_subdir/$wine_conf" ]; then
         echo "$wine_prefix" > "$conf_dir/$conf_subdir/$wine_conf"
     fi
@@ -902,7 +1084,9 @@ preflight_check() {
             fi
         fi
 
-        return 1
+            # Clean up config dir if it only contains firstrun.conf
+            cleanup_conf_if_only_firstrun
+            return 1
     fi
 }
 
@@ -1556,11 +1740,13 @@ download_install() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Installing ${download_type}. Please wait..."
+    progress_update "Starting extraction of ${download_filename}..."
 
     # Extract the archive to the tmp directory
     debug_print continue "Extracting $download_type into $tmp_dir/$download_basename..."
     mkdir "$tmp_dir/$download_basename" && tar -xf "$tmp_dir/$download_filename" -C "$tmp_dir/$download_basename"
 
+    progress_update "Extraction finished; inspecting contents..."
     # Check the contents of the extracted archive to determine the
     # directory structure we must create upon installation
     num_dirs=0
@@ -1848,6 +2034,7 @@ download_file() {
 
     # Download the item to the tmp directory
     debug_print continue "Downloading $download_url into $tmp_dir/$download_filename..."
+    progress_update "Downloading ${download_type} (${download_filename})..."
     if [ "$use_zenity" -eq 1 ]; then
         # Format the curl progress bar for zenity
         mkfifo "$tmp_dir/lugpipe"
@@ -1862,14 +2049,17 @@ download_file() {
         if [ "$?" -eq 1 ]; then
             # User clicked cancel
             debug_print continue "Download aborted. Removing $tmp_dir/$download_filename..."
+            progress_update "Download cancelled by user."
             rm --interactive=never "${tmp_dir:?}/$download_filename"
             rm --interactive=never "${tmp_dir:?}/lugpipe"
             return 1
         fi
         rm --interactive=never "${tmp_dir:?}/lugpipe"
+        progress_update "Download complete: ${download_filename}"
     else
         # Standard curl progress bar
         (cd "$tmp_dir" && curl -#L "$download_url" -o "$download_filename")
+        progress_update "Download complete: ${download_filename}"
     fi
 }
 
@@ -1907,7 +2097,7 @@ maintenance_menu() {
         config_msg="Open Wine prefix configuration"
         controllers_msg="Open Wine controller configuration"
         powershell_msg="Install PowerShell into Wine prefix"
-        rsi_launcher_msg="Update/Re-install Falcon BMS"
+        bms_launcher_msg="Update/Re-install Falcon BMS"
         dirs_msg="Display Helper and Falcon BMS directories"
         reset_msg="Reset Helper configs"
         quit_msg="Return to the main menu"
@@ -2128,6 +2318,7 @@ install_powershell() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Installing PowerShell. Please wait..."
+    progress_update "Installing PowerShell into ${wine_prefix}..."
 
     # Install powershell
     debug_print continue "Installing PowerShell into ${wine_prefix}..."
@@ -2143,9 +2334,9 @@ install_powershell() {
     fi
 }
 
-# MARK: reinstall_rsi_launcher()
+# MARK: reinstall_bms_launcher()
 # Download and re-install the latest Falcon BMS into the wine prefix
-reinstall_rsi_launcher() {
+reinstall_bms_launcher() {
     # Update directories
     getdirs
 
@@ -2179,6 +2370,7 @@ reinstall_rsi_launcher() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Installing Falcon BMS. Please wait..."
+    progress_update "Running Falcon BMS installer..."
 
     # Run the installer
     debug_print continue "Installing Falcon BMS. Please wait; this will take a moment..."
@@ -2266,10 +2458,66 @@ reset_helper() {
         debug_print continue "Deleting $conf_dir/$conf_subdir/*.conf..."
         rm --interactive=never "${conf_dir:?}/$conf_subdir/"*.conf
         message info "The Helper has been reset!"
+        # Terminate the script after a user-requested reset so the interface closes
+        exit 0
     fi
     # Also wipe path variables so the reset takes immediate effect
     wine_prefix=""
     game_path=""
+}
+
+# MARK: uninstall_bms()
+# Remove Falcon BMS installation, desktop files, and icon
+uninstall_bms() {
+    # Prompt for directories (will use saved values if present)
+    getdirs
+    if [ "$?" -eq 1 ]; then
+        # User cancelled
+        return 0
+    fi
+
+    if [ -z "$wine_prefix" ]; then
+        message error "No Falcon BMS installation targeted."
+        return 1
+    fi
+
+    install_dir="$wine_prefix"
+    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
+    localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
+    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+    icon_file="${data_dir}/icons/hicolor/256x256/apps/bms-launcher.png"
+
+    if ! message question "This will permanently delete the Falcon BMS installation at:\n\n$install_dir\n\nand remove desktop shortcuts and icon. Continue?"; then
+        return 0
+    fi
+
+    # Try to stop wine processes
+    if [ -x "$(command -v wineserver)" ]; then
+        wineserver -k 2>/dev/null || true
+    fi
+
+    # Remove the installation folder
+    if [ -d "$install_dir" ]; then
+        rm -r --interactive=never "$install_dir"
+    fi
+
+    # Remove desktop files and icon
+    rm -f -- "$prefix_desktop_file" "$localshare_desktop_file" "$home_desktop_file"
+    rm -f -- "$icon_file"
+
+    # Update desktop database
+    if [ -x "$(command -v update-desktop-database)" ]; then
+        update-desktop-database "${data_dir}/applications" 2>/dev/null || true
+    fi
+
+    # Remove saved config entries for wine prefix and game path
+    rm -f -- "${conf_dir:?}/$conf_subdir/$wine_conf" "${conf_dir:?}/$conf_subdir/$game_conf"
+    # Clean up config dir if it only contains firstrun.conf
+    cleanup_conf_if_only_firstrun
+
+    message info "Falcon BMS has been uninstalled."
+    # Terminate the script interface after successful uninstall
+    exit 0
 }
 
 ############################################################################
@@ -2371,6 +2619,7 @@ install_standard_dxvk() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Updating DXVK. Please wait..."
+    progress_update "Updating DXVK in ${wine_prefix}..."
     debug_print continue "Updating DXVK in ${wine_prefix}..."
 
     # Update dxvk
@@ -2429,6 +2678,7 @@ install_async_dxvk() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Updating DXVK. Please wait..."
+    progress_update "Extracting DXVK and preparing files..."
 
     # Extract the archive to the tmp directory
     debug_print continue "Extracting DXVK into $tmp_dir/$download_basename..."
@@ -2498,6 +2748,7 @@ install_dxvk_nvapi() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Installing DXVK-NVAPI. Please wait..."
+    progress_update "Installing DXVK-NVAPI..."
     debug_print continue "Installing DXVK-NVAPI in ${wine_prefix}..."
 
     # Update dxvk
@@ -2534,9 +2785,9 @@ install_game() {
     fi
 
     # Get the install path from the user
-    if message question "Would you like to use the default install path?\n\n$HOME/Games/falcon-bms"; then
+    if message question "Would you like to use the default install path?\n\n$bms_default_install_path"; then
         # Set the default install path
-        install_dir="$HOME/Games/falcon-bms"
+        install_dir="$bms_default_install_path"
     else
         if [ "$use_zenity" -eq 1 ]; then
             message info "On the next screen, select your Falcon BMS install location"
@@ -2555,13 +2806,13 @@ install_game() {
                 fi
 
                 # Make sure we're not installing over an existing prefix
-                if [ -d "$install_dir/falcon-bms" ]; then
-                    message warning "A directory named \"falcon-bms\" already exists!\nPlease choose a different install location.\n\n$install_dir"
+                if [ -d "$install_dir/$bms_dirname" ]; then
+                    message warning "A directory named \"$bms_dirname\" already exists!\nPlease choose a different install location.\n\n$install_dir"
                     continue
                 fi
 
                 # Add the wine prefix subdirectory to the install path
-                install_dir="$install_dir/falcon-bms"
+                install_dir="$install_dir/$bms_dirname"
 
                 break
             done
@@ -2569,7 +2820,7 @@ install_game() {
             # No Zenity, use terminal-based menus
             clear
             # Get the install path from the user
-            printf "Enter the desired Falcon BMS install path (case sensitive)\nie. /home/USER/Games/falcon-bms\n\n"
+            printf "Enter the desired Falcon BMS install path (case sensitive)\nie. %s\n\n" "$bms_default_install_path"
             while read -rp "Install path: " install_dir; do
                 if [ -z "$install_dir" ]; then
                     printf "Invalid directory. Please try again.\n\n"
@@ -2618,6 +2869,7 @@ install_game() {
     # Abort if the winetricks download failed
     if [ "$?" -eq 1 ]; then
         message error "Unable to install Falcon BMS without winetricks. Aborting."
+        cleanup_conf_if_only_firstrun
         return 1
     fi
 
@@ -2626,6 +2878,7 @@ install_game() {
     # Abort if the download failed
     if [ "$?" -eq 1 ]; then
         message error "Unable to install Falcon BMS. Aborting."
+        cleanup_conf_if_only_firstrun
         return 1
     fi
 
@@ -2641,10 +2894,12 @@ install_game() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Preparing Wine prefix and installing Falcon BMS. Please wait..."
+    progress_update "Preparing Wine prefix..."
 
     # Create the new prefix and install powershell
-    debug_print continue "Preparing Wine prefix. Please wait; this will take a moment..."
-    "$winetricks_bin" -q corefonts lucida verdana dxvk powershell dotnet8 dotnet48 win11 >"$tmp_install_log" 2>&1
+    progress_update "Installing required components into the Wine prefix..."
+    debug_print continue "Installing required components into the Wine prefix. Please wait; this will take a moment..."
+    "$winetricks_bin" -q corefonts lucida verdana dxvk powershell dotnet48 win11 >"$tmp_install_log" 2>&1
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
@@ -2655,6 +2910,7 @@ install_game() {
             debug_print continue "Deleting $install_dir..."
             rm -r --interactive=never "$install_dir"
         fi
+        cleanup_conf_if_only_firstrun
         return 1
     fi
 
@@ -2663,11 +2919,45 @@ install_game() {
 
     # Run the Falcon 4.0 GoG installer
     debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
-    wine "$SCRIPT_DIR/$gog_installer" /VERYSILENT >>"$tmp_install_log" 2>&1
+    progress_update "Running Falcon 4.0 GoG installer..."
+    if [ -n "$selected_gog_installer" ]; then
+        wine "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+    else
+        wine "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+    fi
 
     # Run the Falcon BMS installer
     debug_print continue "Installing Falcon BMS. Please wait; this will take a moment..."
-    wine "$SCRIPT_DIR/$bms_installer" /S /16k /noshort >>"$tmp_install_log" 2>&1
+    progress_update "Running Falcon BMS installer..."
+    # Determine tiles argument (default: opt-out unless user explicitly chose)
+    if [ "${use_16k_tiles:-}" = "1" ]; then
+        tiles_arg="/16k"
+    else
+        tiles_arg=""
+    fi
+    # Determine key argument (for internal installers)
+    if [ -n "${bms_key:-}" ]; then
+        key_arg="/key=${bms_key}"
+    else
+        key_arg=""
+    fi
+    # Build installer argument array to avoid passing empty/split parameters
+    installer_args=("/S")
+    installer_args+=("/noshort")
+    if [ -n "$tiles_arg" ]; then
+        installer_args+=("$tiles_arg")
+    fi
+    if [ -n "$key_arg" ]; then
+        installer_args+=("$key_arg")
+    fi
+    
+    debug_print continue "Falcon BMS selected arguments: ${installer_args[*]}"
+
+    if [ -n "$selected_bms_installer" ]; then
+        wine "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
+    else
+        wine "$SCRIPT_DIR/$bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
+    fi
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 58 ]; then
@@ -2678,6 +2968,7 @@ install_game() {
             debug_print continue "Deleting $install_dir..."
             rm -r --interactive=never "$install_dir"
         fi
+        cleanup_conf_if_only_firstrun
         return 0
     fi
 
@@ -2708,9 +2999,17 @@ install_game() {
     if [ -f "$bms_icon" ]; then
         mkdir -p "${data_dir}/icons/hicolor/256x256/apps" && 
         cp "$bms_icon" "${data_dir}/icons/hicolor/256x256/apps"
+        # also copy to standard name to ensure icon matches desktop file
+        icon_installed_path="${data_dir}/icons/hicolor/256x256/apps/$(basename "$bms_icon")"
+        if [ -f "$icon_installed_path" ]; then
+            debug_print continue "Installed icon to $icon_installed_path"
+        fi
     fi
 
     # Create .desktop files
+    # Remove any GOG-created Falcon 4.0 desktop shortcuts that the GoG installer may have placed
+    remove_gog_falcon4_desktop
+
     create_desktop_files
 
     debug_print continue "Installation finished"
@@ -2747,15 +3046,20 @@ create_desktop_files() {
 
     debug_print continue "Creating ${prefix_desktop_file}..."
     # The backup .desktop file in the prefix directory will always be created so it's up to date
+    # Use the configured base dir (public vs internal) when building Exec/Path
+    escaped_base_dir="$(echo "$bms_base_dir" | sed "s/\\\\/\\\\\\\\/g; s/'/\\'"/g)"
+    icon_installed_path="${data_dir}/icons/hicolor/256x256/apps/$(basename "$bms_icon")"
     echo "[Desktop Entry]
-Name=Falcon BMS 4.38 Launcher
+Name=$bms_base_dir Launcher
 Type=Application
-Comment=Falcon BMS 4.38
-Keywords=Falcon BMS
+Comment=$bms_base_dir
+Keywords=Falcon BMS,Simulation,Flight,Game;
+Terminal=false
 StartupNotify=true
+Categories=Game;
 StartupWMClass=FalconBMS_Alternative_Launcher.exe
-Exec=env WINEPREFIX=\"$install_dir\" wine 'C:\\\\Falcon BMS 4.38\\\\Launcher\\\\FalconBMS_Alternative_Launcher.exe' ''
-Path=$install_dir/drive_c/Falcon BMS 4.38/Launcher/
+Exec=env WINEPREFIX=\"$install_dir\" wine 'C:\\\\$escaped_base_dir\\\\Launcher\\\\FalconBMS_Alternative_Launcher.exe' ''
+Path=$install_dir/drive_c/$bms_base_dir/Launcher/
 Icon=bms-launcher" > "$prefix_desktop_file"
 
     if [ "$create_desktop_files" = "true" ]; then
@@ -2784,6 +3088,41 @@ Icon=bms-launcher" > "$prefix_desktop_file"
             # Desktop file couldn't be created
             message warning "Warning: The .desktop file could not be created!\n\n${localshare_desktop_file}"
         fi
+    fi
+}
+
+# MARK: remove_gog_falcon4_desktop()
+# Remove desktop shortcuts created by the GOG Falcon 4.0 installer (if present)
+remove_gog_falcon4_desktop() {
+    home_desktop_dir="${XDG_DESKTOP_DIR:-$HOME/Desktop}"
+    localshare_dir="${data_dir}/applications"
+    install_dir_safe="${install_dir:-}" # may be empty in some contexts
+
+    removed_any=0
+    patterns=("Falcon 4" "Falcon4" "Falcon_4" "Falcon4.0" "Falcon_4.0")
+
+    for d in "$home_desktop_dir" "$localshare_dir" "$install_dir_safe"; do
+        [ -n "$d" ] || continue
+        for p in "${patterns[@]}"; do
+            # Use simple globbing; enable nullglob to avoid literal pattern
+            shopt -s nullglob 2>/dev/null || true
+            for f in "$d"/*"$p"*.desktop; do
+                if [ -f "$f" ]; then
+                    rm -f -- "$f" 2>/dev/null || true
+                    removed_any=1
+                    debug_print continue "Removed GOG-created desktop shortcut: $f"
+                fi
+            done
+            shopt -u nullglob 2>/dev/null || true
+        done
+    done
+
+    if [ "$removed_any" -eq 1 ]; then
+        # Update desktop database if available
+        if [ -x "$(command -v update-desktop-database)" ]; then
+            update-desktop-database "${data_dir}/applications" 2>/dev/null || true
+        fi
+        message info "Removed GOG Falcon 4.0 desktop shortcuts that were created during installation."
     fi
 }
 
@@ -2863,38 +3202,193 @@ download_winetricks() {
 # Opens browser for GOG download, waits for the installer to appear in Downloads, then runs it
 download_gog_installer() {
 
-    local local_gog_installer="$SCRIPT_DIR/$gog_installer"
-
-    #message info "Searching for GOG installer: $SCRIPT_DIR/$gog_installer"
-
-    if [ -f "$local_gog_installer" ]; then
-        message info "GOG Falcon 4.0 installer found..."
-    else
-        message info "Opening your browser to download Falcon 4.0 from GOG..."
-        if command -v xdg-open >/dev/null 2>&1; then
-            xdg-open "$gog_url" >/dev/null 2>&1 &
-        elif command -v open >/dev/null 2>&1; then
-            open "$gog_url" >/dev/null 2>&1 &
-        else
-            message error "Could not open a web browser. Please visit $gog_url manually."
-            exit 1
+    # If installer_path was provided and looks like the GOG launcher, accept it
+    if [ -n "$installer_path" ]; then
+        bn="$(basename "$installer_path")"
+        if echo "$bn" | grep -qi "setup_falcon_4_2.0.0.1"; then
+            selected_gog_installer="$installer_path"
+            # avoid extra popup on success
+            debug_print continue "GOG installer selected: $selected_gog_installer"
+            return 0
         fi
-        message info "Please now place $gog_installer in the BMS helper script root folder. Only close this message once done..."
+        # if user provided a path but it's not valid, clean up and fail
+        if [ -n "$installer_path" ] && [ ! -f "$installer_path" ]; then
+            message error "Specified GOG installer not found: $installer_path"
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
     fi
+
+    # Retry loop: prompt up to 3 times before failing
+    attempts=0
+    # Show an informational popup once before the first prompt
+    if [ -x "$(command -v zenity)" ]; then
+        zenity --info --no-wrap --text="Please locate the GOG Falcon 4.0 installer (setup_falcon_4_2.0.0.1.exe)" --title="Falcon BMS Helper" 2>/dev/null
+    else
+        printf "Please locate the GOG Falcon 4.0 installer (setup_falcon_4_2.0.0.1.exe)\n"
+    fi
+    while [ "$attempts" -lt 3 ]; do
+        attempts=$((attempts + 1))
+        if [ -x "$(command -v zenity)" ]; then
+            gog_choice="$(zenity --file-selection --title="Select the GOG Falcon 4.0 installer" --filename="$HOME/Downloads/" 2>/dev/null)"
+            if [ -z "$gog_choice" ]; then
+                message warning "No file selected. Attempt $attempts of 3 failed."
+                continue
+            fi
+        else
+            printf "Attempt %d of 3 - Enter the full path to the GOG installer:\n" "$attempts"
+            read -rp ": " gog_choice
+            if [ -z "$gog_choice" ]; then
+                message warning "No file specified. Attempt $attempts of 3 failed."
+                continue
+            fi
+        fi
+
+        if [ ! -f "$gog_choice" ]; then
+            message warning "File not found: $gog_choice (Attempt $attempts of 3)"
+            continue
+        fi
+
+        bn="$(basename "$gog_choice")"
+        if ! echo "$bn" | grep -qi "setup_falcon_4_2.0.0.1"; then
+            message warning "Selected file does not appear to be the GOG launcher: $bn (Attempt $attempts of 3)"
+            continue
+        fi
+
+        selected_gog_installer="$gog_choice"
+        # avoid extra popup on success
+        debug_print continue "GOG installer selected: $selected_gog_installer"
+        return 0
+    done
+
+    message error "Failed to select a valid GOG installer after 3 attempts. Aborting installation."
+    cleanup_conf_if_only_firstrun
+    return 1
 }
 
 # MARK: download_bms_installer()
 # Opens browser for GOG download, waits for the installer to appear in Downloads, then runs it
 download_bms_installer() {
 
-    local local_bms_installer="$SCRIPT_DIR/$bms_installer"
-
-    if [ -f "$local_bms_installer" ]; then
-        message info "Falcon BMS Installer found..."
+    # If a specific installer path was provided, prefer it
+    if [ -n "$installer_path" ]; then
+        if [ -f "$installer_path" ]; then
+            # try to detect type from the provided installer
+            detect_installer_from_path "$installer_path"
+            message info "Falcon BMS Installer found at: $installer_path"
+            # remember the selected installer for downstream use
+            selected_bms_installer="$installer_path"
+            # Offer high-res tiles (/16k) option
+            if message question "Would you like to install the High Resolution Tiles for Falcon BMS? (Internet required)"; then
+                use_16k_tiles=1
+            else
+                use_16k_tiles=0
+            fi
+            # If we're in internal mode, prompt for an internal installation key
+            bms_key=""
+            if [ "$bms_mode" = "internal" ]; then
+                if [ "$use_zenity" -eq 1 ]; then
+                    bms_key="$(zenity --entry --title="Falcon BMS Internal Key" --text="Enter internal installation key (leave blank to skip):" --entry-text="" 2>/dev/null)"
+                    # treat cancel as empty
+                    if [ $? -ne 0 ]; then
+                        bms_key=""
+                    fi
+                else
+                    printf "Enter internal installation key (optional): "
+                    read -r bms_key
+                fi
+                # Trim whitespace
+                bms_key="$(echo "$bms_key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            fi
+            return 0
+        else
+            message error "Specified installer not found: $installer_path"
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+    fi
+    # Prompt the user to select the Falcon BMS installer file
+    # show an informational popup once before the first prompt
+    if [ -x "$(command -v zenity)" ]; then
+        zenity --info --no-wrap --text="Please locate the Falcon BMS installer" --title="Falcon BMS Helper" 2>/dev/null
+        bms_choice="$(zenity --file-selection --title="Select the Falcon BMS installer" --filename="$HOME/Downloads/" 2>/dev/null)"
+        if [ -z "$bms_choice" ]; then
+            message error "No Falcon BMS installer selected. Aborting."
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+        bn="$(basename "$bms_choice")"
     else
-        message error "Falcon BMS Installer not found..."
+        printf "Please locate the Falcon BMS installer"
+        read -rp ": " bms_choice
+        if [ -z "$bms_choice" ]; then
+            message error "No Falcon BMS installer specified. Aborting."
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+        if [ ! -f "$bms_choice" ]; then
+            message error "File not found: $bms_choice"
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+        bn="$(basename "$bms_choice")"
+    fi
+
+    # Validate filename for public or internal patterns
+    # Public: Falcon BMS_4.38.<X>_Full_Setup(.exe)
+    # Internal: Falcon BMS_4.38.<X>_Internal_Full_Setup(.exe)
+    if echo "$bn" | grep -Eq "^Falcon BMS_4\.38\.[0-9]+_Internal_Full_Setup(\.exe)?$"; then
+        detected_type="internal"
+    elif echo "$bn" | grep -Eq "^Falcon BMS_4\.38\.[0-9]+_Full_Setup(\.exe)?$"; then
+        detected_type="public"
+    else
+        message error "Selected file does not match expected Falcon BMS installer patterns: $bn"
         return 1
     fi
+
+    # If user requested internal mode but selected a public installer (or vice versa), warn
+    if [ "$bms_mode" = "internal" ] && [ "$detected_type" != "internal" ]; then
+        if ! message question "You requested internal mode but selected a public installer ($bn). Continue?"; then
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+    elif [ "$bms_mode" = "public" ] && [ "$detected_type" = "internal" ]; then
+        if ! message question "You selected an internal installer ($bn) but are in public mode. Restart the Helper in internal mode now?"; then
+            cleanup_conf_if_only_firstrun
+            return 1
+        else
+            # Relaunch the helper in internal mode, preserving the selected installer
+            exec "${SCRIPT_DIR:-.}/$(basename "$0")" --internal --installer "$bms_choice"
+            # If exec fails for some reason, fall back to switching mode in-process
+            set_bms_mode internal
+        fi
+    fi
+
+    # Save the selection for downstream use (local variable only)
+    selected_bms_installer="$bms_choice"
+    # Offer high-res tiles (/16k) option
+    if message question "Would you like to install the High Resolution Tiles for Falcon BMS? (Internet required)"; then
+        use_16k_tiles=1
+    else
+        use_16k_tiles=0
+    fi
+    # If we're in internal mode, prompt for an internal installation key
+    bms_key=""
+    if [ "$bms_mode" = "internal" ]; then
+        if [ "$use_zenity" -eq 1 ]; then
+            bms_key="$(zenity --entry --title="Falcon BMS Internal Key" --text="Enter internal installation key (leave blank to skip):" --entry-text="" 2>/dev/null)"
+            if [ $? -ne 0 ]; then
+                bms_key=""
+            fi
+        else
+            printf "Enter internal installation key (optional): "
+            read -r bms_key
+        fi
+        bms_key="$(echo "$bms_key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    fi
+    # Don't show a popup on successful selection to reduce interruptions
+    debug_print continue "Falcon BMS installer selected: $selected_bms_installer (use_16k_tiles=$use_16k_tiles bms_key=$bms_key)"
+    return 0
 }
 
 # MARK: set_latest_winetricks()
@@ -3112,7 +3606,35 @@ while true; do
 
     # Configure the menu options
     preflight_msg="Preflight Check (System Optimization)"
-    install_msg_wine="Install Falcon BMS"
+    # If an installation is detected, offer Uninstall instead of Install
+    # Detect whether a valid installation exists. Check multiple sources:
+    # 1) saved gamedir.conf points to an existing directory
+    # 2) saved wine prefix (winedir.conf) contains the expected game base dir
+    # 3) the default install path exists
+    installed="false"
+    if [ -f "$conf_dir/$conf_subdir/$game_conf" ]; then
+        saved_game_path="$(cat "$conf_dir/$conf_subdir/$game_conf")"
+        if [ -n "$saved_game_path" ] && [ -d "$saved_game_path" ]; then
+            installed="true"
+        fi
+    fi
+    if [ "$installed" = "false" ] && [ -f "$conf_dir/$conf_subdir/$wine_conf" ]; then
+        saved_wine_prefix="$(cat "$conf_dir/$conf_subdir/$wine_conf")"
+        if [ -n "$saved_wine_prefix" ] && [ -d "$saved_wine_prefix/drive_c/$bms_base_dir" ]; then
+            installed="true"
+        fi
+    fi
+    if [ "$installed" = "false" ] && [ -d "$bms_default_install_path" ]; then
+        installed="true"
+    fi
+
+    if [ "$installed" = "true" ]; then
+        install_msg_wine="Remove Falcon BMS"
+        install_action="uninstall_bms"
+    else
+        install_msg_wine="Install Falcon BMS"
+        install_action="install_game"
+    fi
     #runners_msg_wine="Manage Wine Runners"
     dxvk_msg_wine="Manage DXVK"
     maintenance_msg="Maintenance and Troubleshooting"
@@ -3122,7 +3644,7 @@ while true; do
     # Set the options to be displayed in the menu
     menu_options=("$preflight_msg" "$install_msg_wine" "$maintenance_msg" "$quit_msg")
     # Set the corresponding functions to be called for each of the options
-    menu_actions=("preflight_check" "install_game" "maintenance_menu" "quit")
+    menu_actions=("preflight_check" "$install_action" "maintenance_menu" "quit")
 
     # Calculate the total height the menu should be
     # menu_option_height = pixels per menu option
