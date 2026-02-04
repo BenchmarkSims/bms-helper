@@ -517,19 +517,74 @@ progress_bar() {
             return 0
         fi
 
-        # Show a zenity pulsating progress bar and use a temp file to track it inside the subshell
-        touch "$tmp_dir/zenity_progress_bar_running"
-        while [ -f "$tmp_dir/zenity_progress_bar_running" ]; do
-            sleep 1
-        done | zenity --progress --pulsate --no-cancel --auto-close --title="Falcon BMS Linux Helper" --text="$2" 2>/dev/null &
-        
+        fifo="$tmp_dir/zenity_progress_fifo"
+        pidfile="$tmp_dir/zenity_progress_bar_pid"
+        runningflag="$tmp_dir/zenity_progress_bar_running"
+
+        # Ensure no stale FIFO remains
+        rm -f "$fifo" "$pidfile" 2>/dev/null || true
+        mkfifo "$fifo" 2>/dev/null || {
+            debug_print continue "Failed to create progress FIFO. Falling back to old progress behavior."
+            touch "$runningflag"
+            while [ -f "$runningflag" ]; do
+                sleep 1
+            done | zenity --progress --pulsate --no-cancel --auto-close --title="Falcon BMS Linux Helper" --text="$2" 2>/dev/null &
+            trap 'progress_bar stop' SIGINT
+            return 0
+        }
+
+        # Start zenity reading from the FIFO and keep a writable FD (3) open so other functions can write updates
+        zenity --progress --pulsate --no-cancel --auto-close --title="Falcon BMS Linux Helper" --text="$2" < "$fifo" 2>/dev/null &
+        echo "$!" > "$pidfile"
+
+        # Open a write descriptor to the FIFO for updates (fd 3)
+        exec 3>"$fifo" || true
+        # Send initial text
+        printf "# %s\n" "$2" >&3 2>/dev/null || true
+
+        touch "$runningflag"
         trap 'progress_bar stop' SIGINT # catch sigint to cleanly kill the zenity progress window
     elif [ "$1" = "stop" ]; then
-        # Stop the zenity progress window
-        rm --interactive=never "$tmp_dir/zenity_progress_bar_running" 2>/dev/null
+        fifo="$tmp_dir/zenity_progress_fifo"
+        pidfile="$tmp_dir/zenity_progress_bar_pid"
+        runningflag="$tmp_dir/zenity_progress_bar_running"
+
+        # Stop the zenity progress window: close fd3, remove fifo and flag, and kill zenity if still running
+        if [ -e /proc/$$/fd/3 ]; then
+            exec 3>&- || true
+        fi
+        if [ -f "$pidfile" ]; then
+            zenity_pid=$(cat "$pidfile" 2>/dev/null)
+            if [ -n "$zenity_pid" ] && kill -0 "$zenity_pid" 2>/dev/null; then
+                kill "$zenity_pid" 2>/dev/null || true
+            fi
+            rm -f "$pidfile" 2>/dev/null || true
+        fi
+        rm --interactive=never "$runningflag" 2>/dev/null
+        rm -f "$fifo" 2>/dev/null || true
         trap - SIGINT # Remove the trap
     else
         debug_print exit "Script error:  The progress_bar function expects either 'start' or 'stop' as the first argument. Aborting."
+    fi
+}
+
+# MARK: progress_update()
+# Write a step/message to the existing zenity progress window. Accepts a single string.
+progress_update() {
+    if [ "$use_zenity" -eq 0 ]; then
+        return 0
+    fi
+    if [ -z "$1" ]; then
+        return 0
+    fi
+    fifo="$tmp_dir/zenity_progress_fifo"
+    # Try writing to fd 3 first, fall back to writing directly to the FIFO
+    if [ -e /proc/$$/fd/3 ]; then
+        printf "# %s\n" "$1" >&3 2>/dev/null || true
+        return 0
+    fi
+    if [ -p "$fifo" ]; then
+        printf "# %s\n" "$1" > "$fifo" 2>/dev/null &
     fi
 }
 
@@ -1685,11 +1740,13 @@ download_install() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Installing ${download_type}. Please wait..."
+    progress_update "Starting extraction of ${download_filename}..."
 
     # Extract the archive to the tmp directory
     debug_print continue "Extracting $download_type into $tmp_dir/$download_basename..."
     mkdir "$tmp_dir/$download_basename" && tar -xf "$tmp_dir/$download_filename" -C "$tmp_dir/$download_basename"
 
+    progress_update "Extraction finished; inspecting contents..."
     # Check the contents of the extracted archive to determine the
     # directory structure we must create upon installation
     num_dirs=0
@@ -1977,6 +2034,7 @@ download_file() {
 
     # Download the item to the tmp directory
     debug_print continue "Downloading $download_url into $tmp_dir/$download_filename..."
+    progress_update "Downloading ${download_type} (${download_filename})..."
     if [ "$use_zenity" -eq 1 ]; then
         # Format the curl progress bar for zenity
         mkfifo "$tmp_dir/lugpipe"
@@ -1991,14 +2049,17 @@ download_file() {
         if [ "$?" -eq 1 ]; then
             # User clicked cancel
             debug_print continue "Download aborted. Removing $tmp_dir/$download_filename..."
+            progress_update "Download cancelled by user."
             rm --interactive=never "${tmp_dir:?}/$download_filename"
             rm --interactive=never "${tmp_dir:?}/lugpipe"
             return 1
         fi
         rm --interactive=never "${tmp_dir:?}/lugpipe"
+        progress_update "Download complete: ${download_filename}"
     else
         # Standard curl progress bar
         (cd "$tmp_dir" && curl -#L "$download_url" -o "$download_filename")
+        progress_update "Download complete: ${download_filename}"
     fi
 }
 
@@ -2257,6 +2318,7 @@ install_powershell() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Installing PowerShell. Please wait..."
+    progress_update "Installing PowerShell into ${wine_prefix}..."
 
     # Install powershell
     debug_print continue "Installing PowerShell into ${wine_prefix}..."
@@ -2308,6 +2370,7 @@ reinstall_bms_launcher() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Installing Falcon BMS. Please wait..."
+    progress_update "Running Falcon BMS installer..."
 
     # Run the installer
     debug_print continue "Installing Falcon BMS. Please wait; this will take a moment..."
@@ -2556,6 +2619,7 @@ install_standard_dxvk() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Updating DXVK. Please wait..."
+    progress_update "Updating DXVK in ${wine_prefix}..."
     debug_print continue "Updating DXVK in ${wine_prefix}..."
 
     # Update dxvk
@@ -2614,6 +2678,7 @@ install_async_dxvk() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Updating DXVK. Please wait..."
+    progress_update "Extracting DXVK and preparing files..."
 
     # Extract the archive to the tmp directory
     debug_print continue "Extracting DXVK into $tmp_dir/$download_basename..."
@@ -2683,6 +2748,7 @@ install_dxvk_nvapi() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Installing DXVK-NVAPI. Please wait..."
+    progress_update "Installing DXVK-NVAPI..."
     debug_print continue "Installing DXVK-NVAPI in ${wine_prefix}..."
 
     # Update dxvk
@@ -2828,10 +2894,12 @@ install_game() {
 
     # Show a zenity pulsating progress bar
     progress_bar start "Preparing Wine prefix and installing Falcon BMS. Please wait..."
+    progress_update "Preparing Wine prefix..."
 
     # Create the new prefix and install powershell
-    debug_print continue "Preparing Wine prefix. Please wait; this will take a moment..."
-    "$winetricks_bin" -q corefonts lucida verdana dxvk powershell dotnet8 dotnet48 win11 >"$tmp_install_log" 2>&1
+    progress_update "Installing required components into the Wine prefix..."
+    debug_print continue "Installing required components into the Wine prefix. Please wait; this will take a moment..."
+    "$winetricks_bin" -q corefonts lucida verdana dxvk powershell dotnet48 win11 >"$tmp_install_log" 2>&1
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
@@ -2851,6 +2919,7 @@ install_game() {
 
     # Run the Falcon 4.0 GoG installer
     debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
+    progress_update "Running Falcon 4.0 GoG installer..."
     if [ -n "$selected_gog_installer" ]; then
         wine "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
     else
@@ -2859,8 +2928,9 @@ install_game() {
 
     # Run the Falcon BMS installer
     debug_print continue "Installing Falcon BMS. Please wait; this will take a moment..."
+    progress_update "Running Falcon BMS installer..."
     # Determine tiles argument (default: opt-out unless user explicitly chose)
-    if [ "${use_16k_tiles:-0}" = "1" ]; then
+    if [ "${use_16k_tiles:-}" = "1" ]; then
         tiles_arg="/16k"
     else
         tiles_arg=""
@@ -2881,6 +2951,7 @@ install_game() {
         installer_args+=("$key_arg")
     fi
     
+    debug_print continue "Falcon BMS selected arguments: ${installer_args[*]}"
 
     if [ -n "$selected_bms_installer" ]; then
         wine "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
@@ -2936,6 +3007,9 @@ install_game() {
     fi
 
     # Create .desktop files
+    # Remove any GOG-created Falcon 4.0 desktop shortcuts that the GoG installer may have placed
+    remove_gog_falcon4_desktop
+
     create_desktop_files
 
     debug_print continue "Installation finished"
@@ -3014,6 +3088,41 @@ Icon=bms-launcher" > "$prefix_desktop_file"
             # Desktop file couldn't be created
             message warning "Warning: The .desktop file could not be created!\n\n${localshare_desktop_file}"
         fi
+    fi
+}
+
+# MARK: remove_gog_falcon4_desktop()
+# Remove desktop shortcuts created by the GOG Falcon 4.0 installer (if present)
+remove_gog_falcon4_desktop() {
+    home_desktop_dir="${XDG_DESKTOP_DIR:-$HOME/Desktop}"
+    localshare_dir="${data_dir}/applications"
+    install_dir_safe="${install_dir:-}" # may be empty in some contexts
+
+    removed_any=0
+    patterns=("Falcon 4" "Falcon4" "Falcon_4" "Falcon4.0" "Falcon_4.0")
+
+    for d in "$home_desktop_dir" "$localshare_dir" "$install_dir_safe"; do
+        [ -n "$d" ] || continue
+        for p in "${patterns[@]}"; do
+            # Use simple globbing; enable nullglob to avoid literal pattern
+            shopt -s nullglob 2>/dev/null || true
+            for f in "$d"/*"$p"*.desktop; do
+                if [ -f "$f" ]; then
+                    rm -f -- "$f" 2>/dev/null || true
+                    removed_any=1
+                    debug_print continue "Removed GOG-created desktop shortcut: $f"
+                fi
+            done
+            shopt -u nullglob 2>/dev/null || true
+        done
+    done
+
+    if [ "$removed_any" -eq 1 ]; then
+        # Update desktop database if available
+        if [ -x "$(command -v update-desktop-database)" ]; then
+            update-desktop-database "${data_dir}/applications" 2>/dev/null || true
+        fi
+        message info "Removed GOG Falcon 4.0 desktop shortcuts that were created during installation."
     fi
 }
 
