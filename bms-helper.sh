@@ -1620,6 +1620,7 @@ preflight_check() {
     avx_check
     mapcount_check
     filelimit_check
+    vr_check
 
     # Populate info strings with the results and add formatting
     if [ "${#preflight_fail[@]}" -gt 0 ]; then
@@ -1925,6 +1926,65 @@ filelimit_confirm() {
 
 ############################################################################
 ######## end filelimit functions ###########################################
+############################################################################
+
+############################################################################
+######## begin vr check functions #########################################
+############################################################################
+
+# MARK: _vr_wivrn_lib_found()
+# Returns 0 if WiVRn OpenXR library is present in any standard path
+_vr_wivrn_lib_found() {
+    for d in /usr/lib/wivrn /usr/lib/x86_64-linux-gnu/wivrn /usr/lib64/wivrn \
+              "$HOME/.local/lib/wivrn"; do
+        [ -f "$d/libopenxr_wivrn.so" ] && return 0
+    done
+    return 1
+}
+
+# MARK: vr_check()
+# Detect installed VR runtimes, layers, and helper tools.
+# Results are informational only: found items go to preflight_pass,
+# so this check never hard-blocks an installation.
+vr_check() {
+    local vr_detected=()
+
+    # ── Active OpenXR runtime JSON ────────────────────────────────────────
+    local openxr_cfg_json="${XR_RUNTIME_JSON:-${XDG_CONFIG_HOME:-$HOME/.config}/openxr/1/active_runtime.json}"
+    if [ -f "$openxr_cfg_json" ]; then
+        local rt_lib rt_name="unknown"
+        rt_lib="$(grep -o '"library_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$openxr_cfg_json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+        case "$rt_lib" in
+            *wivrn*) rt_name="WiVRn" ;;
+        esac
+        vr_detected+=("Active OpenXR runtime: $rt_name")
+    fi
+
+    # ── OpenXR runtimes ───────────────────────────────────────────────────
+    # WiVRn
+    if command -v wivrn-server >/dev/null 2>&1; then
+        vr_detected+=("WiVRn")
+    elif _vr_wivrn_lib_found; then
+        vr_detected+=("WiVRn (library only, server not in PATH)")
+    fi
+    # ── Container / tooling ───────────────────────────────────────────────
+    command -v umu-run    >/dev/null 2>&1 && vr_detected+=("umu-run (pressure-vessel VR container support)")
+    command -v vulkaninfo >/dev/null 2>&1 && vr_detected+=("vulkaninfo (Vulkan GPU detection)")
+
+    # ── Report ────────────────────────────────────────────────────────────
+    if [ "${#vr_detected[@]}" -gt 0 ]; then
+        local vr_str="VR packages / runtimes detected:"
+        for item in "${vr_detected[@]}"; do
+            vr_str="$vr_str\n  •  $item"
+        done
+        preflight_pass+=("$vr_str")
+    else
+        preflight_pass+=("No VR packages detected. VR is optional; install WiVRn to enable it.")
+    fi
+}
+
+############################################################################
+######## end vr check functions ############################################
 ############################################################################
 
 ############################################################################
