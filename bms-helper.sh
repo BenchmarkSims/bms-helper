@@ -10,7 +10,7 @@
 # https://github.com/falcon-bms/linux-helper
 #
 # Author: https://github.com/maxwaldorf
-# Project inspired from: https://github.com/starcitizen-lug/sc-helper
+# Project inspired by community launcher-helper workflows
 #
 # License: GPLv3.0
 ############################################################################
@@ -54,25 +54,24 @@ if [ ! -x "$(command -v xargs)" ]; then
     fi
     exit 1
 fi
-if [ ! -x "$(command -v cabextract)" ] || [ ! -x "$(command -v unzip)" ]; then
-    # winetricks dependencies
-    # Print to stderr and also try warning the user through zenity or notify-send
-    printf "bms-helper.sh: One or more required packages were not found on this system.\nPlease check that the following winetricks dependencies (or winetricks itself) are installed:\n- cabextract\n- unzip\n" 1>&2
+if [ ! -x "$(command -v protontricks)" ]; then
+    # protontricks is required for prefix setup and maintenance actions
+    printf "bms-helper.sh: The required package 'protontricks' was not found on this system.\n" 1>&2
     if [ -x "$(command -v zenity)" ]; then
-        zenity --error --width="400" --title="Falcon BMS Linux Helper" --text="One or more required packages were not found on this system.\n\nPlease check that the following winetricks dependencies (or winetricks itself) are installed:\n- cabextract\n- unzip"
+        zenity --error --width="420" --title="Falcon BMS Linux Helper" --text="The required package 'protontricks' was not found on this system.\n\nPlease install protontricks and run the helper again."
     elif [ -x "$(command -v notify-send)" ]; then
-        notify-send "bms-helper" "One or more required packages were not found on this system.\nPlease check that the following winetricks dependencies (or winetricks itself) are installed:\n- cabextract\n- unzip\n" --icon=dialog-warning
+        notify-send "bms-helper" "The required package 'protontricks' was not found on this system. Please install protontricks and run again." --icon=dialog-warning
     fi
     exit 1
 fi
-if [ ! -x "$(command -v wine)" ]; then
-    # wine
+    if [ ! -x "$(command -v cabextract)" ] || [ ! -x "$(command -v unzip)" ]; then
+    # Required helper utilities for archive handling
     # Print to stderr and also try warning the user through zenity or notify-send
-    printf "bms-helper.sh: One or more required packages were not found on this system.\nPlease check that 'wine' is installed!\n" 1>&2
+    printf "bms-helper.sh: One or more required helper utilities were not found on this system.\nPlease check that the following packages are installed:\n- cabextract\n- unzip\n" 1>&2
     if [ -x "$(command -v zenity)" ]; then
-        zenity --error --width="400" --title="Falcon BMS Linux Helper" --text="One or more required packages were not found on this system.\n\nPlease check that 'wine' is installed!"
+        zenity --error --width="400" --title="Falcon BMS Linux Helper" --text="One or more required helper utilities were not found on this system.\n\nPlease check that the following packages are installed:\n- cabextract\n- unzip"
     elif [ -x "$(command -v notify-send)" ]; then
-        notify-send "bms-helper" "One or more required packages were not found on this system.\nPlease check that 'wine' is installed!\n" --icon=dialog-warning
+        notify-send "bms-helper" "One or more required helper utilities were not found on this system.\nPlease check that the following packages are installed:\n- cabextract\n- unzip\n" --icon=dialog-warning
     fi
     exit 1
 fi
@@ -113,10 +112,84 @@ set_bms_mode() {
             bms_wiki="https://wiki.falcon-bms.com"
             ;;
     esac
+
+    # Ensure a sane default for max items to request/iterate
+    max_download_items=${max_download_items:-50}
+}
+
+# MARK: refresh_desktop_execs()
+# Update existing .desktop files to use the configured Proton runner (if present)
+refresh_desktop_execs() {
+    # Ensure directories/paths are available
+    getdirs || return 1
+
+    # Paths to the desktop files (same as create_desktop_files)
+    localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
+    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+
+    # Ensure install_dir is set (fallback to wine_prefix)
+    install_dir="${install_dir:-$wine_prefix}"
+
+    # Ensure launch script exists and is up to date
+    create_or_update_launch_script || true
+    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
+
+    # Prefer a persisted current runner in the install dir
+    proton_candidate=""
+    if [ -n "$install_dir" ] && [ -f "$install_dir/current_runner" ]; then
+        proton_candidate="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
+    fi
+
+    # Fallback: try to read proton_path from the saved launch script in the prefix
+    if [ -z "$proton_candidate" ] && [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
+        if [ -n "$wine_launch_script_name" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
+            launch_script="$wine_prefix/$wine_launch_script_name"
+        else
+            for f in "$wine_prefix"/*; do
+                if [ -f "$f" ] && grep -q -e '^export proton_path=' -e '^proton_path=' "$f" 2>/dev/null; then
+                    launch_script="$f"
+                    break
+                fi
+            done
+        fi
+        if [ -n "$launch_script" ]; then
+            proton_candidate="$(grep -e '^export proton_path=' -e '^proton_path=' "$launch_script" | awk -F '=' '{print $2}' | tr -d '"')"
+            proton_candidate="$(echo "$proton_candidate" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
+        fi
+    fi
+
+    # Determine which runner binary to use in Exec lines
+    runner_exec="wine"
+    if [ -n "$proton_candidate" ] && [ -x "$proton_candidate/proton" ]; then
+        runner_exec="$proton_candidate/proton"
+    else
+        wine_bin="$(command -v wine 2>/dev/null || true)"
+        if [ -n "$wine_bin" ]; then
+            runner_exec="$wine_bin"
+        fi
+    fi
+
+    # Desktop entries now launch through the generated prefix script
+    exec_line="Exec=\"$install_dir/$wine_launch_script_name\""
+
+    # Replace Exec lines in any existing desktop files to use exec_line
+    for f in "$localshare_desktop_file" "$home_desktop_file" "$prefix_desktop_file"; do
+        if [ -f "$f" ]; then
+            sed -i -E "s|^Exec=.*|$exec_line|" "$f" 2>/dev/null || true
+        fi
+    done
+
+    debug_print continue "Refreshed desktop Exec lines to use launch script: $install_dir/$wine_launch_script_name"
+    return 0
 }
 
 # initialize defaults
 set_bms_mode "$bms_mode"
+
+# Default Proton GE version to preselect on first install. Change this
+# to another version basename (example: "GE-Proton10-18") if you want
+# a different default when the Proton list is shown for the first time.
+PROTON_DEFAULT_VERSION="GE-Proton10-18"
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # Path to bundled icon
@@ -161,9 +234,15 @@ fi
 # Helper directory
 helper_dir="$(realpath "$0" | xargs -0 dirname)"
 
+# Per-prefix launcher script used by desktop entries and maintenance actions
+wine_launch_script_name="bms-launcher.sh"
+
 # Temporary directory
 tmp_dir="$(mktemp -d -t "bmshelper.XXXXXXXXXX")"
 trap 'rm -r --interactive=never "$tmp_dir"' EXIT
+
+# Always use the system-installed protontricks executable
+protontricks_bin="$(command -v protontricks 2>/dev/null || true)"
 
 # Installer detection
 # User can point to an installer with the environment variable `BMS_INSTALLER`
@@ -232,7 +311,7 @@ fi
 # The second is expected to contain the api releases url
 # ie. "RawFox" "https://api.github.com/repos/rawfoxDE/raw-wine/releases"
 runner_sources=(
-    "LUG" "https://api.github.com/repos/starcitizen-lug/lug-wine/releases"
+    "GE-Proton" "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases"
 )
 
 ######## DXVK ##############################################################
@@ -633,25 +712,31 @@ menu() {
 
     # Use Zenity if it is available
     if [ "$use_zenity" -eq 1 ]; then
-        # Format the options array for Zenity by adding
-        # TRUE or FALSE to indicate default selections
-        # ie: "TRUE" "List item 1" "FALSE" "List item 2" "FALSE" "List item 3"
+        # Format the options array for Zenity by adding TRUE or FALSE to
+        # indicate default selections. If `menu_default_choice` is set and
+        # matches the start of a menu label, use that index as the default
+        # selection. Otherwise fall back to selecting the first item.
         unset zen_options
+        default_index=0
+        if [ -n "${menu_default_choice:-}" ]; then
+            for (( _j=0; _j<"${#menu_options[@]}"-1; _j++ )); do
+                if [[ "${menu_options[_j]}" == "${menu_default_choice}"* ]]; then
+                    default_index=$_j
+                    break
+                fi
+            done
+        fi
+
         for (( i=0; i<"${#menu_options[@]}"-1; i++ )); do
-            if [ "$i" -eq 0 ]; then
-                # Set the first element
-                if [ "$menu_type" = "radiolist" ]; then
-                    # Select the first radio button by default
-                    zen_options=("TRUE")
+            if [ "$menu_type" = "radiolist" ]; then
+                if [ "$i" -eq "$default_index" ]; then
+                    zen_options+=("TRUE")
                 else
-                    # Don't select the first checklist item
-                    zen_options=("FALSE")
+                    zen_options+=("FALSE")
                 fi
             else
-                # Deselect all remaining items
                 zen_options+=("FALSE")
             fi
-            # Add the menu list item
             zen_options+=("${menu_options[i]}")
         done
 
@@ -919,6 +1004,464 @@ getdirs() {
     fi
 
     return "$retval"
+}
+
+# MARK: get_current_runner()
+# Populate `current_runner_path` and `current_runner_basename` based on persisted file or launch script
+get_current_runner() {
+    current_runner_path=""
+    current_runner_basename=""
+
+    # Ensure wine_prefix and install_dir are available
+    getdirs || return 1
+    install_dir="${install_dir:-$wine_prefix}"
+
+    # Prefer persisted selection in the install dir
+    if [ -n "$install_dir" ] && [ -f "$install_dir/current_runner" ]; then
+        persisted_runner="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
+        if [ -n "$persisted_runner" ] && [ -d "$persisted_runner" ]; then
+            current_runner_path="$persisted_runner"
+            current_runner_basename="$(basename "$persisted_runner")"
+            return 0
+        fi
+    fi
+
+    # Fallback: inspect launch scripts in the prefix for proton_path or wine_path
+    if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
+        if [ -n "$wine_launch_script_name" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
+            launch_script="$wine_prefix/$wine_launch_script_name"
+        else
+            for f in "$wine_prefix"/*; do
+                if [ -f "$f" ] && (grep -q -e '^export proton_path=' -e '^proton_path=' "$f" 2>/dev/null || grep -q -e '^export wine_path=' -e '^wine_path=' "$f" 2>/dev/null); then
+                    launch_script="$f"
+                    break
+                fi
+            done
+        fi
+        if [ -n "$launch_script" ] && [ -f "$launch_script" ]; then
+            launcher_path="$(grep -e '^export proton_path=' -e '^proton_path=' "$launch_script" | awk -F '=' '{print $2}' | tr -d '"')"
+            if [ -z "$launcher_path" ]; then
+                launcher_path="$(grep -e '^export wine_path=' -e '^wine_path=' "$launch_script" | awk -F '=' '{print $2}' | tr -d '"')"
+            fi
+            launcher_path="$(echo "$launcher_path" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
+            if [ -n "$launcher_path" ]; then
+                current_runner_path="$launcher_path"
+                current_runner_basename="$(basename "$launcher_path")"
+            fi
+        fi
+    fi
+    return 0
+}
+
+# MARK: create_or_update_launch_script()
+# Generate/update a per-prefix launch script.
+# The script encapsulates runner/proton invocation so desktop files can call it directly.
+create_or_update_launch_script() {
+    # Resolve target prefix/install dir
+    install_dir="${install_dir:-$wine_prefix}"
+    if [ -z "$install_dir" ]; then
+        return 1
+    fi
+
+    # Determine launcher executable path (prefer expected, fallback to search)
+    launcher_exe_unix="$install_dir/drive_c/$bms_base_dir/Launcher/FalconBMS_Alternative_Launcher.exe"
+    if [ ! -f "$launcher_exe_unix" ]; then
+        detected_launcher="$(find "$install_dir/drive_c" -type f -name 'FalconBMS_Alternative_Launcher.exe' 2>/dev/null | head -n 1)"
+        if [ -n "$detected_launcher" ]; then
+            launcher_exe_unix="$detected_launcher"
+        fi
+    fi
+
+    # Determine configured runner directory
+    runner_dir=""
+    if [ -f "$install_dir/current_runner" ]; then
+        runner_dir="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
+    fi
+    if [ -z "$runner_dir" ] && [ -f "$install_dir/$wine_launch_script_name" ]; then
+        script_proton_path="$(grep -e '^export proton_path=' -e '^proton_path=' "$install_dir/$wine_launch_script_name" | awk -F '=' '{print $2}' | tr -d '\"')"
+        script_wine_path="$(grep -e '^export wine_path=' -e '^wine_path=' "$install_dir/$wine_launch_script_name" | awk -F '=' '{print $2}' | tr -d '\"')"
+        if [ -n "$script_proton_path" ] && [ -d "$script_proton_path" ]; then
+            runner_dir="$script_proton_path"
+        elif [ -n "$script_wine_path" ]; then
+            # script_wine_path may point to .../bin
+            if [ -d "$script_wine_path" ] && [ -x "$script_wine_path/wine" ]; then
+                runner_dir="$(dirname "$script_wine_path")"
+            fi
+        fi
+    fi
+
+    # Derive proton_path and wine_path values for script
+    proton_path=""
+    wine_path=""
+    if [ -n "$runner_dir" ] && [ -x "$runner_dir/proton" ]; then
+        proton_path="$runner_dir"
+    fi
+    if [ -n "$runner_dir" ] && [ -x "$runner_dir/files/bin/wine" ]; then
+        wine_path="$runner_dir/files/bin"
+    elif [ -n "$runner_dir" ] && [ -x "$runner_dir/wine" ]; then
+        wine_path="$runner_dir"
+    elif [ -n "$runner_dir" ] && [ -x "$runner_dir/bin/wine" ]; then
+        wine_path="$runner_dir/bin"
+    else
+        sys_wine="$(command -v wine 2>/dev/null || true)"
+        if [ -n "$sys_wine" ]; then
+            wine_path="$(dirname "$sys_wine")"
+        fi
+    fi
+
+    launch_script_path="$install_dir/$wine_launch_script_name"
+    cat > "$launch_script_path" <<EOF
+#!/usr/bin/env bash
+
+# Falcon BMS launcher generated by bms-helper.sh
+# Inspired by community launch-script patterns.
+# version: 1.8
+
+############################################################################
+# Environment
+############################################################################
+export WINEPREFIX="$install_dir"
+launch_log="\$WINEPREFIX/bms-launch.log"
+
+# Default to Proton. Change this to 0 to force Wine fallback.
+export BMS_USE_PROTON_LAUNCHER=1
+
+# Map Proton's expected pfx path to the root of the prefix natively to avoid split game installs
+if [ -d "\$WINEPREFIX/drive_c" ]; then
+    if [ -e "\$WINEPREFIX/pfx" ] && [ ! -L "\$WINEPREFIX/pfx" ]; then
+        # Proton mistakenly created a split prefix directory. Move it aside.
+        mv "\$WINEPREFIX/pfx" "\$WINEPREFIX/pfx.bak-\$(date +%s)" >> "\$launch_log" 2>&1 || true
+    fi
+    if [ ! -e "\$WINEPREFIX/pfx" ]; then
+        (cd "\$WINEPREFIX" && ln -s . pfx >> "\$launch_log" 2>&1) || true
+    fi
+fi
+
+# Keep desktop entries stable and favor native .NET runtime components.
+# mscoree=n prevents accidental fallback to Wine Mono for .NET Framework apps.
+export WINEDLLOVERRIDES="winemenubuilder.exe=d;mscoree=n,b"
+export WINEDEBUG=-all
+unset SDL_VIDEODRIVER
+
+# Managed runner paths (updated by bms-helper)
+export proton_path="$proton_path"
+export wine_path="$wine_path"
+
+# If OS wine fallback is explicitly requested, clear custom runner paths
+if [ "\$1" = "--wine" ] || [ "\$1" = "wine" ]; then
+    export proton_path=""
+    export wine_path=""
+fi
+
+# When Proton is configured, prefer its own Wine binaries so registry and
+# launcher operations use the same runtime view.
+if [ -n "\$proton_path" ]; then
+    if [ -x "\$proton_path/files/bin/wine" ]; then
+        export wine_path="\$proton_path/files/bin"
+    elif [ -x "\$proton_path/bin/wine" ]; then
+        export wine_path="\$proton_path/bin"
+    fi
+fi
+
+launcher_exe="$launcher_exe_unix"
+bms_reg_path="HKLM\\Software\\Benchmark Sims\\$bms_base_dir"
+bms_reg_path_wow="HKLM\\Software\\WOW6432Node\\Benchmark Sims\\$bms_base_dir"
+
+############################################################################
+# Helpers
+############################################################################
+run_wine() {
+    if [ -n "\$wine_path" ] && [ -x "\$wine_path/wine" ]; then
+        "\$wine_path/wine" "\$@"
+        return \$?
+    fi
+
+    sys_wine="\$(command -v wine 2>/dev/null || true)"
+    if [ -n "\$sys_wine" ] && [ -x "\$sys_wine" ]; then
+        "\$sys_wine" "\$@"
+        return \$?
+    fi
+
+    echo "No usable wine binary found." >&2
+    return 1
+}
+
+run_wineserver_kill() {
+    if [ -n "\$wine_path" ] && [ -x "\$wine_path/wineserver" ]; then
+        "\$wine_path/wineserver" -k >/dev/null 2>&1 || true
+    elif command -v wineserver >/dev/null 2>&1; then
+        wineserver -k >/dev/null 2>&1 || true
+    fi
+}
+
+sync_registry_view() {
+    # Some installs only write BMS keys under WOW6432Node.
+    # Mirror key values into HKLM\\Software\\Benchmark Sims\\... for apps that read 64-bit view.
+    if run_wine reg query "\$bms_reg_path" >/dev/null 2>&1; then
+        return 0
+    fi
+    if ! run_wine reg query "\$bms_reg_path_wow" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    for reg_name in baseDir curPatch curTheater curUpdate Key; do
+        reg_value="\$(run_wine reg query "\$bms_reg_path_wow" /v "\$reg_name" 2>/dev/null | awk '/REG_SZ/{\$1="";\$2=""; sub(/^  */,""); sub(/\r\$/, ""); print; exit}')"
+        if [ -n "\$reg_value" ]; then
+            run_wine reg add "\$bms_reg_path" /v "\$reg_name" /t REG_SZ /d "\$reg_value" /f >/dev/null 2>&1 || true
+        fi
+    done
+}
+
+sync_registry_into_proton_pfx() {
+    # Proton may use a separate compat prefix under WINEPREFIX/pfx.
+    # Mirror Falcon registry values there so Proton-launched apps can find them.
+    if [ ! -d "\$WINEPREFIX/pfx" ]; then
+        return 0
+    fi
+    if [ -L "\$WINEPREFIX/pfx" ]; then
+        return 0
+    fi
+
+    src_prefix="\$WINEPREFIX"
+    dst_prefix="\$WINEPREFIX/pfx"
+    if [ "\$src_prefix" = "\$dst_prefix" ]; then
+        return 0
+    fi
+
+    for reg_name in baseDir curPatch curTheater curUpdate Key; do
+        export WINEPREFIX="\$src_prefix"
+        reg_value="\$(run_wine reg query "\$bms_reg_path" /v "\$reg_name" 2>/dev/null | awk '/REG_SZ/{\$1="";\$2=""; sub(/^  */,""); sub(/\r\$/, ""); print; exit}')"
+        if [ -z "\$reg_value" ]; then
+            reg_value="\$(run_wine reg query "\$bms_reg_path_wow" /v "\$reg_name" 2>/dev/null | awk '/REG_SZ/{\$1="";\$2=""; sub(/^  */,""); sub(/\r\$/, ""); print; exit}')"
+        fi
+        [ -z "\$reg_value" ] && continue
+
+        export WINEPREFIX="\$dst_prefix"
+        run_wine reg add "\$bms_reg_path" /v "\$reg_name" /t REG_SZ /d "\$reg_value" /f >/dev/null 2>&1 || true
+        run_wine reg add "\$bms_reg_path_wow" /v "\$reg_name" /t REG_SZ /d "\$reg_value" /f >/dev/null 2>&1 || true
+    done
+
+    export WINEPREFIX="\$src_prefix"
+}
+
+sync_registry_for_proton_run() {
+    if [ -z "\$proton_path" ] || [ ! -x "\$proton_path/proton" ]; then
+        return 0
+    fi
+
+    compat_client_path="\${STEAM_COMPAT_CLIENT_INSTALL_PATH:-\$proton_path}"
+
+    for reg_name in baseDir curPatch curTheater curUpdate Key; do
+        # Read from current prefix view first
+        reg_value="\$(run_wine reg query "\$bms_reg_path" /v "\$reg_name" 2>/dev/null | awk '/REG_SZ/{\$1="";\$2=""; sub(/^  */,""); sub(/\r\$/, ""); print; exit}')"
+        if [ -z "\$reg_value" ]; then
+            reg_value="\$(run_wine reg query "\$bms_reg_path_wow" /v "\$reg_name" 2>/dev/null | awk '/REG_SZ/{\$1="";\$2=""; sub(/^  */,""); sub(/\r\$/, ""); print; exit}')"
+        fi
+        [ -z "\$reg_value" ] && continue
+
+        env WINEPREFIX="\$WINEPREFIX" \
+            STEAM_COMPAT_DATA_PATH="\$WINEPREFIX" \
+            STEAM_COMPAT_CLIENT_INSTALL_PATH="\$compat_client_path" \
+            UMU_ID=0 \
+            "\$proton_path/proton" run reg add "\$bms_reg_path" /v "\$reg_name" /t REG_SZ /d "\$reg_value" /f >/dev/null 2>&1 || true
+
+        env WINEPREFIX="\$WINEPREFIX" \
+            STEAM_COMPAT_DATA_PATH="\$WINEPREFIX" \
+            STEAM_COMPAT_CLIENT_INSTALL_PATH="\$compat_client_path" \
+            UMU_ID=0 \
+            "\$proton_path/proton" run reg add "\$bms_reg_path_wow" /v "\$reg_name" /t REG_SZ /d "\$reg_value" /f >/dev/null 2>&1 || true
+    done
+}
+
+check_dotnet48() {
+    # .NET Framework 4.8 release key threshold (Windows 10 May 2019 update and later)
+    min_release=528040
+    dotnet_release=""
+
+    dotnet_release="\$(run_wine reg query 'HKLM\\Software\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full' /v Release 2>/dev/null | awk '/REG_DWORD/{print \$3; exit}')"
+    if [ -z "\$dotnet_release" ]; then
+        dotnet_release="\$(run_wine reg query 'HKLM\\Software\\WOW6432Node\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full' /v Release 2>/dev/null | awk '/REG_DWORD/{print \$3; exit}')"
+    fi
+
+    if [ -z "\$dotnet_release" ]; then
+        echo "WARNING: .NET Framework 4.8 was not detected in this prefix." >> "\$launch_log"
+        echo "         Install dotnet48 (for example via protontricks/winetricks) if your launcher requires it." >> "\$launch_log"
+        return 1
+    fi
+
+    # Sanitize output to a numeric token before arithmetic handling.
+    dotnet_release_token="\$(echo "\$dotnet_release" | grep -Eo '0x[0-9A-Fa-f]+|[0-9]+' | head -n1)"
+    if [ -z "\$dotnet_release_token" ]; then
+        echo "WARNING: Could not parse .NET release value: '\$dotnet_release'" >> "\$launch_log"
+        echo "         Your launcher may fail until dotnet48 is installed in this prefix." >> "\$launch_log"
+        return 1
+    fi
+
+    if echo "\$dotnet_release_token" | grep -qi '^0x'; then
+        dotnet_release_dec=\$((dotnet_release_token))
+    else
+        dotnet_release_dec="\$dotnet_release_token"
+    fi
+
+    if [ "\$dotnet_release_dec" -lt "\$min_release" ]; then
+        echo "WARNING: Detected .NET release key \$dotnet_release_dec, expected >= \$min_release for .NET 4.8." >> "\$launch_log"
+        echo "         Your launcher may fail until dotnet48 is installed in this prefix." >> "\$launch_log"
+        return 1
+    fi
+
+    return 0
+}
+
+############################################################################
+# Subcommands (maintenance)
+############################################################################
+case "\$1" in
+    shell)
+        echo "Entering Wine prefix shell. Type 'exit' when done."
+        if [ -n "\$wine_path" ]; then
+            export PATH="\$wine_path:\$PATH"
+        fi
+        cd "\$WINEPREFIX" || exit 1
+        /usr/bin/env bash --norc
+        exit 0
+        ;;
+    config)
+        run_wine winecfg
+        exit \$?
+        ;;
+    controllers)
+        run_wine control joy.cpl
+        exit \$?
+        ;;
+esac
+
+############################################################################
+# Launch
+############################################################################
+if [ ! -f "\$launcher_exe" ]; then
+    echo "Launcher executable not found: \$launcher_exe" >&2
+    exit 1
+fi
+
+# Clear stale wine processes before launch
+run_wineserver_kill
+
+# Ensure expected BMS registry path exists for both 32-bit and 64-bit views
+sync_registry_view
+sync_registry_into_proton_pfx
+sync_registry_for_proton_run
+
+# Warn in the launch log if .NET 4.8 is missing/outdated for launcher apps that require it
+check_dotnet48 || true
+
+# Ensure relative paths resolve from launcher directory
+launcher_dir="\$(dirname "\$launcher_exe")"
+if [ -d "\$launcher_dir" ]; then
+    cd "\$launcher_dir" || true
+fi
+
+# Proton is preferred by default. Explicit launch mode can be selected with:
+#   --proton (force Proton)
+#   --wine   (force Wine)
+#   --auto   (use default/env behavior)
+# Env overrides:
+#   BMS_USE_PROTON_LAUNCHER=0|1
+#   BMS_ALLOW_WINE_FALLBACK=0|1
+requested_mode="auto"
+case "\$1" in
+    --proton|proton)
+        requested_mode="proton"
+        ;;
+    --wine|wine)
+        requested_mode="wine"
+        ;;
+    --auto|auto|"")
+        requested_mode="auto"
+        ;;
+esac
+
+# Default to Proton first; if unavailable we'll log and fall back to Wine.
+default_proton_mode=1
+proton_available=0
+if [ -n "\$proton_path" ] && [ -x "\$proton_path/proton" ]; then
+    proton_available=1
+fi
+
+mode_source="default"
+use_proton_launcher="\$default_proton_mode"
+if [ -n "\${BMS_USE_PROTON_LAUNCHER+x}" ]; then
+    use_proton_launcher="\$BMS_USE_PROTON_LAUNCHER"
+    mode_source="env"
+fi
+
+if [ "\$requested_mode" = "proton" ]; then
+    use_proton_launcher=1
+    mode_source="cli"
+elif [ "\$requested_mode" = "wine" ]; then
+    use_proton_launcher=0
+    mode_source="cli"
+fi
+
+# Normalize values to 0/1 for predictable behavior and logs.
+if [ "\$use_proton_launcher" != "1" ]; then
+    use_proton_launcher=0
+fi
+allow_wine_fallback="\${BMS_ALLOW_WINE_FALLBACK:-0}"
+if [ "\$allow_wine_fallback" != "1" ]; then
+    allow_wine_fallback=0
+fi
+
+echo "=== \$(date '+%Y-%m-%d %H:%M:%S') bms-launcher start (requested_mode=\$requested_mode source=\$mode_source proton_mode=\$use_proton_launcher proton_available=\$proton_available fallback=\$allow_wine_fallback) ===" >> "\$launch_log"
+echo "runner_paths proton_path=\$proton_path wine_path=\$wine_path" >> "\$launch_log"
+
+if [ "\$use_proton_launcher" = "1" ] && [ "\$proton_available" = "1" ]; then
+    runner_root="\$proton_path"
+    # Keep Proton launch independent from any local Steam installation.
+    # Use an explicit override only if the user provides one.
+    compat_client_path="\${STEAM_COMPAT_CLIENT_INSTALL_PATH:-\$runner_root}"
+
+    echo "runner_selected=proton proton_bin=\$proton_path/proton compat_client_path=\$compat_client_path" >> "\$launch_log"
+
+    env WINEPREFIX="\$WINEPREFIX" \
+        STEAM_COMPAT_DATA_PATH="\$WINEPREFIX" \
+        STEAM_COMPAT_CLIENT_INSTALL_PATH="\$compat_client_path" \
+        UMU_ID=0 \
+        PROTON_LOG=1 \
+        "\$proton_path/proton" run "\$(basename "\$launcher_exe")" >> "\$launch_log" 2>&1
+    proton_exit=\$?
+    echo "proton_exit_code=\$proton_exit" >> "\$launch_log"
+    if [ "\$proton_exit" -eq 0 ]; then
+        exit 0
+    fi
+
+    if [ "\$allow_wine_fallback" != "1" ]; then
+        echo "Proton launch failed with code \$proton_exit. Wine fallback disabled." >> "\$launch_log"
+        exit \$proton_exit
+    fi
+
+    echo "Proton launch failed with code \$proton_exit. Falling back to wine." >> "\$launch_log"
+fi
+
+if [ "\$use_proton_launcher" = "1" ] && [ "\$proton_available" != "1" ]; then
+    echo "Proton was requested but no valid proton binary was found. Falling back to wine." >> "\$launch_log"
+fi
+
+wine_bin="system:wine"
+if [ -n "\$wine_path" ] && [ -x "\$wine_path/wine" ]; then
+    wine_bin="\$wine_path/wine"
+elif command -v wine >/dev/null 2>&1; then
+    wine_bin="\$(command -v wine)"
+fi
+echo "runner_selected=wine wine_bin=\$wine_bin" >> "\$launch_log"
+
+run_wine "\$(basename "\$launcher_exe")" >> "\$launch_log" 2>&1
+wine_exit=\$?
+echo "wine_exit_code=\$wine_exit" >> "\$launch_log"
+exit \$wine_exit
+EOF
+
+    chmod +x "$launch_script_path" 2>/dev/null || true
+    return 0
 }
 
 
@@ -1406,22 +1949,62 @@ runner_manage() {
     download_dir="$wine_prefix/runners"
 
     # Configure the text displayed in the menus
-    download_menu_heading="Wine Runners"
-    download_menu_description="The runners listed below are wine builds created for Falcon BMS"
+    download_menu_heading="Proton Runners"
+    download_menu_description="The runners listed below are Proton/Proton-GE builds created for Falcon BMS"
     download_menu_height="320"
 
     # Set the string sed will match against when editing the launch script
     # This will be used to detect the appropriate variable and replace its value
     # with the path to the downloaded item
-    post_download_sed_string="export wine_path="
+    post_download_sed_string="export proton_path="
     # Set the value of the above variable that will be restored after a runner is deleted
-    # In this case, we want to revert to the configured default wine runner
-    post_delete_restore_value="${download_dir}/${default_runner}/bin"
+    # In this case, we want to revert to the configured default runner
+    post_delete_restore_value="${download_dir}/${default_runner}"
 
     # Call the download_manage function with the above configuration
     # The argument passed to the function is used for special handling
     # and displayed in the menus and dialogs.
     download_manage "runner"
+}
+
+# MARK: proton_manage()
+# Configure the download_manage function specifically for Proton GE runners
+proton_manage() {
+    post_download_type="configure-proton"
+
+    # Use a small local sources array that points to GE-Proton only
+    proton_sources=("GE-Proton" "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases")
+    declare -n download_sources=proton_sources
+
+    # Get directories so we know where the wine prefix is
+    getdirs
+
+    # Set the download directory for proton runners
+    download_dir="$wine_prefix/runners"
+
+    # Configure the text displayed in the menus
+    download_menu_heading="Proton GE"
+    download_menu_description="The Proton GE builds listed below can be downloaded and used as the prefix runner"
+    download_menu_height="320"
+
+    # Preselect the currently active runner if one exists, otherwise fallback to
+    # the preferred default version in the download menu. This value comes
+    # from the top-level `PROTON_DEFAULT_VERSION` variable.
+    get_current_runner
+    if [ -n "$current_runner_basename" ]; then
+        menu_default_choice="$current_runner_basename"
+    else
+        menu_default_choice="$PROTON_DEFAULT_VERSION"
+    fi
+
+    # This will match the proton_path variable in the launch script
+    post_download_sed_string="export proton_path="
+    post_delete_restore_value="${download_dir}/${default_runner}"
+
+    download_manage "proton"
+
+    # Clear the default selection to avoid affecting other menus
+    unset menu_default_choice
 }
 
 # MARK: download_select_install()
@@ -1525,15 +2108,86 @@ download_select_install() {
 
     # Fetch a list of versions from the selected contributor
     unset download_versions
+    # Save raw API output to a temp file for debugging/fallbacks
+    api_dump="$tmp_dir/${contributor_name//[^a-zA-Z0-9]/_}-api.json"
+    curl -s "$contributor_url$query_string" -o "$api_dump"
+
+    # Parse the list of asset basenames from the saved API dump
+    if [ -n "$match_url_keyword" ]; then
+        parse_cmd="grep -Eo \"\\\"$search_key\\\": ?\\\"[^\\\"]+\\\"\" \"$api_dump\" | grep \"$match_url_keyword\" | cut -d '\\"' -f4 | cut -d '?' -f1 | xargs -n1 basename | grep -viE \"$filter_keywords\""
+    else
+        parse_cmd="grep -Eo \"\\\"$search_key\\\": ?\\\"[^\\\"]+\\\"\" \"$api_dump\" | cut -d '\\"' -f4 | cut -d '?' -f1 | xargs -n1 basename | grep -viE \"$filter_keywords\""
+    fi
     while IFS='' read -r line; do
         download_versions+=("$line")
-    done < <(curl -s "$contributor_url$query_string" | grep -Eo "\"$search_key\": ?\"[^\"]+\"" | grep "$match_url_keyword" | cut -d '"' -f4 | cut -d '?' -f1 | xargs basename -a | grep -viE "$filter_keywords")
+    done < <(eval "$parse_cmd")
     # Note: match from search_key until " or EOL (Handles embedded commas and escaped quotes). Cut out quotes and gitlab's extraneous query strings.
 
     # Sanity check
     if [ "${#download_versions[@]}" -eq 0 ]; then
+        # Attempt a fallback: extract release tag names from the API if asset parsing failed
+        debug_print continue "No assets parsed from API; attempting fallback to release tags for $contributor_name"
+        api_dump="$tmp_dir/${contributor_name//[^a-zA-Z0-9]/_}-api.json"
+        curl -s "$contributor_url$query_string" -o "$api_dump"
+        if [ -f "$api_dump" ]; then
+            # Fallback: extract asset 'name' fields (archive filenames) from the API dump
+            while IFS='' read -r asset_name; do
+                download_versions+=("$asset_name")
+            done < <(grep -Eo '"name": ?"[^"]+"' "$api_dump" | cut -d '"' -f4 | grep -Ei '\.tar\.gz$|\.tgz$|\.tar\.xz$|\.tar\.zst$' | grep -viE "$filter_keywords")
+        fi
+    fi
+
+    if [ "${#download_versions[@]}" -eq 0 ]; then
         message warning "No $download_type versions were found.  The $download_url_type API may be down or rate limited."
         return 1
+    fi
+
+    # Deduplicate by basename (strip extensions) while preserving order.
+    # Prefer more modern compressed formats when multiple extensions exist for the same basename.
+    if [ "${#download_versions[@]}" -gt 1 ]; then
+        declare -A _seen_base
+        declare -A _seen_index
+        declare -A _seen_ext
+        unset _unique_download_versions
+        # preference weights: higher = more preferred
+        declare -A _pref=( [zst]=4 [xz]=3 [gz]=2 [tgz]=1 )
+        for _dv in "${download_versions[@]}"; do
+            # determine basename and extension token
+            if [[ "$_dv" == *.tar.zst ]]; then
+                _base="${_dv%.tar.zst}"
+                _ext="zst"
+            elif [[ "$_dv" == *.tar.xz ]]; then
+                _base="${_dv%.tar.xz}"
+                _ext="xz"
+            elif [[ "$_dv" == *.tar.gz ]]; then
+                _base="${_dv%.tar.gz}"
+                _ext="gz"
+            elif [[ "$_dv" == *.tgz ]]; then
+                _base="${_dv%.tgz}"
+                _ext="tgz"
+            else
+                _base="$_dv"
+                _ext=""
+            fi
+
+            if [ -z "${_seen_base[$_base]+x}" ]; then
+                _unique_download_versions+=("$_dv")
+                _seen_base[$_base]=1
+                _seen_index[$_base]=$((${#_unique_download_versions[@]}-1))
+                _seen_ext[$_base]="$_ext"
+            else
+                # If current extension is more preferred than stored, replace the stored entry
+                stored_ext="${_seen_ext[$_base]}"
+                curr_pref=${_pref[$_ext]:-0}
+                stored_pref=${_pref[$stored_ext]:-0}
+                if [ "$curr_pref" -gt "$stored_pref" ]; then
+                    idx=${_seen_index[$_base]}
+                    _unique_download_versions[$idx]="$_dv"
+                    _seen_ext[$_base]="$_ext"
+                fi
+            fi
+        done
+        download_versions=("${_unique_download_versions[@]}")
     fi
 
     # Configure the menu
@@ -1549,12 +2203,49 @@ download_select_install() {
     # and add them to the menu options
     # To add new file extensions, handle them here and in
     # the download_install function
-    for (( i=0,num_download_items=0; i<"${#download_versions[@]}" && "$num_download_items"<"$max_download_items"; i++ )); do
+
+    # If listing Proton runners, attempt to detect the currently
+    # configured Proton runner from the launch script so we can mark
+    # it as "(in use)" in the menu.
+    if [ "$download_type" = "proton" ]; then
+        # Ensure install_dir is set so we can read persisted runner info
+        install_dir="${install_dir:-$wine_prefix}"
+        current_runner_basename=""
+        launch_script=""
+        if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
+            if [ -n "$wine_launch_script_name" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
+                launch_script="$wine_prefix/$wine_launch_script_name"
+            else
+                for f in "$wine_prefix"/*; do
+                    if [ -f "$f" ] && grep -q -e '^export proton_path=' -e '^proton_path=' "$f" 2>/dev/null; then
+                        launch_script="$f"
+                        break
+                    fi
+                done
+            fi
+        fi
+        if [ -n "$launch_script" ]; then
+            launcher_path="$(grep -e '^export proton_path=' -e '^proton_path=' "$launch_script" | awk -F '=' '{print $2}' | tr -d '"')"
+            launcher_path="$(echo "$launcher_path" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
+            if [ -n "$launcher_path" ]; then
+                current_runner_basename="$(basename "$launcher_path")"
+            fi
+        fi
+        # If a persisted current_runner exists in install dir, prefer it
+        if [ -f "$install_dir/current_runner" ]; then
+            persisted_runner="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
+            if [ -n "$persisted_runner" ]; then
+                current_runner_basename="$(basename "$persisted_runner")"
+            fi
+        fi
+    fi
+
+    for (( i=0, num_download_items=0; i<${#download_versions[@]} && num_download_items<max_download_items; i++ )); do
 
         # Get the file name minus the extension
         case "${download_versions[i]}" in
-            *.sha*sum | *.ini | proton* | *.txt)
-                # Ignore hashes, configs, and proton downloads
+            *.sha*sum | *.ini | *.txt)
+                # Ignore hashes and configs
                 continue
                 ;;
             *.tar.gz)
@@ -1578,13 +2269,24 @@ download_select_install() {
 
         # Build the menu item
         unset menu_option_text
-        if [ -d "${download_dir}/${download_basename}" ] && [ "$download_type" = "runner" ] && [ "$current_runner_basename" = "$download_basename" ]; then
-            menu_option_text="$download_basename    [in-use]"
-        elif [ -d "${download_dir}/${download_basename}" ]; then
-            menu_option_text="$download_basename    [installed]"
+        if [ "$download_type" = "proton" ]; then
+            if [ -d "${download_dir}/${download_basename}" ] && [ "$current_runner_basename" = "$download_basename" ]; then
+                menu_option_text="$download_basename (in use)"
+            elif [ -d "${download_dir}/${download_basename}" ]; then
+                menu_option_text="$download_basename (downloaded)"
+            else
+                # The file is not installed
+                menu_option_text="$download_basename"
+            fi
         else
-            # The file is not installed
-            menu_option_text="$download_basename"
+            if [ -d "${download_dir}/${download_basename}" ] && [ "$download_type" = "runner" ] && [ "$current_runner_basename" = "$download_basename" ]; then
+                menu_option_text="$download_basename    [in-use]"
+            elif [ -d "${download_dir}/${download_basename}" ]; then
+                menu_option_text="$download_basename    [installed]"
+            else
+                # The file is not installed
+                menu_option_text="$download_basename"
+            fi
         fi
 
         # Add the file names to the menu
@@ -1959,9 +2661,9 @@ post_download() {
     # Sanity checks
     if [ -z "$post_download_type" ]; then
         debug_print exit "Script error: The string 'post_download_type' was not set before calling the post_download function. Aborting."
-    elif [ -z "$post_download_sed_string" ] && [ "$post_download_type" = "configure-wine" ]; then
+    elif { [ -z "$post_download_sed_string" ] && { [ "$post_download_type" = "configure-wine" ] || [ "$post_download_type" = "configure-proton" ]; }; }; then
         debug_print exit "Script error: The string 'post_download_sed_string' was not set before calling the post_download function. Aborting."
-    elif [ -z "$post_delete_restore_value" ] && [ "$post_download_type" = "configure-wine" ]; then
+    elif { [ -z "$post_delete_restore_value" ] && { [ "$post_download_type" = "configure-wine" ] || [ "$post_download_type" = "configure-proton" ]; }; }; then
         debug_print exit "Script error: The string 'post_delete_restore_value' was not set before calling the post_download function. Aborting."
     elif [ -z "$download_dir" ]; then
         debug_print exit "Script error: The string 'download_dir' was not set before calling the post_download function. Aborting."
@@ -1972,28 +2674,22 @@ post_download() {
         return 0
     fi
 
+    # Ensure launch script exists before attempting sed-based updates
+    install_dir="${install_dir:-$wine_prefix}"
+    create_or_update_launch_script || true
+
     # Handle the appropriate post-download actions
     if [ "$post_download_type" = "configure-wine" ]; then
 
-        # We handle installs and deletions differently
+        # We handle installs and deletions differently for wine-style runners
         if [ "$post_download_required" = "installed" ] && [ "$download_type" = "runner" ]; then
-            # We are installing a wine version and updating the launch script to use it
-
-            # Replace the specified variable in the launch script
             debug_print continue "Updating \"${post_download_sed_string}\" variable in launch script ${wine_prefix}/${wine_launch_script_name}..."
             sed -i "s|^${post_download_sed_string}.*|${post_download_sed_string}\"${wine_prefix}/runners/${downloaded_item_name}/bin\"|" "$wine_prefix/$wine_launch_script_name"
-
-            # Display a confirmation message
             message info "Wine Runner installation complete!"
         elif [ "$post_download_required" = "deleted" ] && [ "$download_type" = "runner" ]; then
-            # We deleted a custom wine version and need to revert the launch script to use the default wine runner
-
-            # Check if the default wine runner is installed
             if [ ! -d "${download_dir}/${default_runner}" ]; then
                 message info "The Wine runner currently used by your launch script has been deleted!\n\nThe default Wine runner will now be downloaded and installed."
-                # Install the default wine runner into the prefix
                 download_wine
-                # Make sure the wine download worked
                 if [ "$?" -eq 1 ]; then
                     message warning "Something went wrong while installing ${default_runner}!\n\nYou will need to edit your launch script's \"${post_download_sed_string}\" variable manually."
                     return 1
@@ -2001,13 +2697,57 @@ post_download() {
             else
                 message info "The Wine runner currently used by your launch script has been deleted!\n\nYour launch script will be updated to use the default Wine runner."
             fi
-
-            # Replace the specified variable in the launch script
             debug_print continue "Updating \"${post_download_sed_string}\" variable in launch script ${wine_prefix}/${wine_launch_script_name}..."
             sed -i "s#^${post_download_sed_string}.*#${post_download_sed_string}\"${post_delete_restore_value}\"#" "$wine_prefix/$wine_launch_script_name"
-
-            # Display a confirmation message
             message info "Your launch script has been updated!"
+        else
+            debug_print exit "Script error: Unknown post_download_required value in post_download function. Aborting."
+        fi
+    elif [ "$post_download_type" = "configure-proton" ]; then
+
+        # Handle installs and deletions for Proton-style runners
+        if [ "$post_download_required" = "installed" ] && { [ "$download_type" = "runner" ] || [ "$download_type" = "proton" ]; }; then
+            debug_print continue "Updating \"${post_download_sed_string}\" variable in launch script ${wine_prefix}/${wine_launch_script_name}..."
+            # Point proton_path at the installed runner directory
+            sed -i "s|^${post_download_sed_string}.*|${post_download_sed_string}\"${wine_prefix}/runners/${downloaded_item_name}\"|" "$wine_prefix/$wine_launch_script_name"
+            message info "Proton Runner installation complete!"
+            # Persist the selected runner in the install directory for stable detection
+            install_dir="${install_dir:-$wine_prefix}"
+            if [ -n "$install_dir" ]; then
+                mkdir -p "$install_dir"
+                echo "${install_dir:-$wine_prefix}/runners/${downloaded_item_name}" > "$install_dir/current_runner"
+                chmod 644 "$install_dir/current_runner" 2>/dev/null || true
+            fi
+            # Regenerate .desktop files so Exec lines prefer the newly installed Proton runner
+            if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
+                debug_print continue "Regenerating .desktop files to use the new Proton runner..."
+                create_desktop_files
+                # Also refresh any existing desktop files so previously-created
+                # shortcuts are updated to use the selected Proton binary.
+                refresh_desktop_execs
+                message info "Launch environment updated to use the selected Proton runner."
+            fi
+        elif [ "$post_download_required" = "deleted" ] && { [ "$download_type" = "runner" ] || [ "$download_type" = "proton" ]; }; then
+            if [ ! -d "${download_dir}/${default_runner}" ]; then
+                message info "The Proton runner currently used by your launch script has been deleted!\n\nThe default runner will now be downloaded and installed."
+                download_wine
+                if [ "$?" -eq 1 ]; then
+                    message warning "Something went wrong while installing ${default_runner}!\n\nYou will need to edit your launch script's \"${post_download_sed_string}\" variable manually."
+                    return 1
+                fi
+            else
+                message info "The Proton runner currently used by your launch script has been deleted!\n\nYour launch script will be updated to use the default runner."
+            fi
+            debug_print continue "Updating \"${post_download_sed_string}\" variable in launch script ${wine_prefix}/${wine_launch_script_name}..."
+            sed -i "s#^${post_download_sed_string}.*#${post_download_sed_string}\"${post_delete_restore_value}\"#" "$wine_prefix/$wine_launch_script_name"
+            message info "Your launch script has been updated!"
+            # Update persisted current runner to the restore value
+            install_dir="${install_dir:-$wine_prefix}"
+            if [ -n "$install_dir" ]; then
+                mkdir -p "$install_dir"
+                echo "${post_delete_restore_value}" > "$install_dir/current_runner"
+                chmod 644 "$install_dir/current_runner" 2>/dev/null || true
+            fi
         else
             debug_print exit "Script error: Unknown post_download_required value in post_download function. Aborting."
         fi
@@ -2096,6 +2836,7 @@ maintenance_menu() {
         launchscript_msg="Edit launch script"
         config_msg="Open Wine prefix configuration"
         controllers_msg="Open Wine controller configuration"
+        protontricks_msg="Open Protontricks package manager"
         powershell_msg="Install PowerShell into Wine prefix"
         bms_launcher_msg="Update/Re-install Falcon BMS"
         dirs_msg="Display Helper and Falcon BMS directories"
@@ -2103,9 +2844,9 @@ maintenance_menu() {
         quit_msg="Return to the main menu"
 
         # Set the options to be displayed in the menu
-        menu_options=("$prefix_msg" "$config_msg" "$controllers_msg" "$powershell_msg" "$dirs_msg" "$reset_msg" "$quit_msg")
+        menu_options=("$prefix_msg" "$launcher_msg" "$config_msg" "$controllers_msg" "$protontricks_msg" "$powershell_msg" "$dirs_msg" "$reset_msg" "$quit_msg")
         # Set the corresponding functions to be called for each of the options
-        menu_actions=("switch_prefix" "call_launch_script config" "call_launch_script controllers" "install_powershell" "display_dirs" "reset_helper" "menu_loop_done")
+        menu_actions=("switch_prefix" "update_launch_script" "call_launch_script config" "call_launch_script controllers" "launch_protontricks" "install_powershell" "display_dirs" "reset_helper" "menu_loop_done")
 
         # Calculate the total height the menu should be
         # menu_option_height = pixels per menu option
@@ -2152,75 +2893,23 @@ update_launch_script() {
         return 0
     fi
 
-    if [ ! -f "$wine_prefix/$wine_launch_script_name" ]; then
-        message warning "Game launch script not found!\n\n$wine_prefix/$wine_launch_script_name"
+    install_dir="${wine_prefix}"
+
+    # Backup old launcher if present
+    if [ -f "$wine_prefix/$wine_launch_script_name" ]; then
+        cp "$wine_prefix/$wine_launch_script_name" "$wine_prefix/$(basename "$wine_launch_script_name" .sh).bak"
+    fi
+
+    if ! create_or_update_launch_script; then
+        message error "Unable to generate the launch script.\n\n$wine_prefix/$wine_launch_script_name"
         return 1
     fi
 
-    # Get launch script version info
-    current_launcher_ver="$(grep "^# version:" "$wine_prefix/$wine_launch_script_name" | awk '{print $3}')"
-    latest_launcher_ver="$(grep "^# version:" "$wine_launch_script" | awk '{print $3}')"
+    # Ensure desktop files are repaired to point to the launch script
+    create_desktop_files needed
+    refresh_desktop_execs
 
-    # Get some path variables from the existing launch script
-    launcher_wineprefix="$(grep "^export WINEPREFIX=" "$wine_prefix/$wine_launch_script_name" | awk -F '=' '{print $2}' | tr -d '"')"
-    launcher_winepath="$(grep -e "^export wine_path=" -e "^wine_path=" "$wine_prefix/$wine_launch_script_name" | awk -F '=' '{print $2}' | tr -d '"')"
-
-    if [ "$latest_launcher_ver" != "$current_launcher_ver" ] &&
-       [ "$current_launcher_ver" = "$(printf "%s\n%s" "$current_launcher_ver" "$latest_launcher_ver" | sort -V | head -n1)" ]; then
-        # The launch script is out of date and needs to be updated
-
-        # Backup the file
-        cp "$wine_prefix/$wine_launch_script_name" "$wine_prefix/$(basename "$wine_launch_script_name" .sh).bak"
-
-        # If wineprefix isn't found in the file, something is wrong and we shouldn't proceed
-        if [ -z "$launcher_wineprefix" ]; then
-            message error "The WINEPREFIX env var was not found in your launch script. Unable to proceed!\n\n$wine_prefix/$wine_launch_script_name"
-            return 1
-        fi
-
-        # If wine_path is empty, it may be an older version of the launch script. Default to system wine
-        if [ -z "$launcher_winepath" ]; then
-            launcher_winepath="$(command -v wine | xargs dirname)"
-            launcher_winepath="${launcher_winepath:-/usr/bin}" # default to /usr/bin if still empty
-        fi
-
-        # Copy in the new launch script
-        cp "$wine_launch_script" "$wine_prefix"
-
-        # Restore the wine prefix variable
-        if [ "$launcher_wineprefix" != "$wine_prefix" ]; then
-            # Offer to fix an incorrectly referenced wine prefix
-            if message question "Your launch script is pointing to the wrong Wine prefix.\nWould you like to update it to use the correct prefix?\n\nCurrent prefix in launch script:\n${launcher_wineprefix}\n\nCorrect prefix:\n${wine_prefix}"; then
-                sed -i "s|^export WINEPREFIX=.*|export WINEPREFIX=\"$wine_prefix\"|" "$wine_prefix/$wine_launch_script_name"
-            fi
-        else
-            # Restore the backed up prefix variable if the user doesn't want to change it
-            sed -i "s|^export WINEPREFIX=.*|export WINEPREFIX=\"$launcher_wineprefix\"|" "$wine_prefix/$wine_launch_script_name"
-        fi
-
-        # Restore the wine path variable
-        sed -i "s#^export wine_path=.*#export wine_path=\"$launcher_winepath\"#" "$wine_prefix/$wine_launch_script_name"
-
-        # Create .desktop files if needed
-        create_desktop_files needed
-
-        message info "Your game launch script has been updated!\n\nIf you had customized your script, you'll need to re-add your changes.\nA backup was created at:\n\n$wine_prefix/$(basename "$wine_launch_script_name" .sh).bak"
-    elif [ "$launcher_wineprefix" != "$wine_prefix" ]; then
-        # The launch script is the correct version, but the current prefix is pointing to the wrong location
-
-        # Create .desktop files if needed
-        create_desktop_files needed
-
-        if message question "Your launch script is pointing to the wrong Wine prefix.\nWould you like to update it to use the correct prefix?\n\nCurrent prefix in launch script:\n${launcher_wineprefix}\n\nCorrect prefix:\n${wine_prefix}"; then
-            sed -i "s|^export WINEPREFIX=.*|export WINEPREFIX=\"$wine_prefix\"|" "$wine_prefix/$wine_launch_script_name"
-            message info "Your game launch script has been repaired!"
-        fi
-    else
-        # Create .desktop files if needed
-        create_desktop_files needed
-
-        message info "Your game launch script is already up to date!"
-    fi
+    message info "Your game launch script has been updated/repaired.\n\nPath:\n$wine_prefix/$wine_launch_script_name"
 }
 
 # MARK: edit_launch_script()
@@ -2286,15 +2975,84 @@ call_launch_script() {
     "$wine_prefix/$wine_launch_script_name" "$launch_arg"
 }
 
+# MARK: launch_protontricks()
+# Open protontricks GUI for the currently targeted Falcon BMS prefix
+launch_protontricks() {
+    # Resolve target prefix
+    getdirs
+    if [ "$?" -eq 1 ]; then
+        message warning "Unable to open protontricks."
+        return 1
+    fi
+
+    # Resolve proton runner from the selected install
+    proton_runner=""
+    if [ -f "$wine_prefix/current_runner" ]; then
+        proton_runner="$(sed -n '1p' "$wine_prefix/current_runner" | tr -d '\r')"
+    fi
+
+    # Fallback to launch script value when current_runner file is missing
+    if [ -z "$proton_runner" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
+        proton_runner="$(grep -e '^export proton_path=' -e '^proton_path=' "$wine_prefix/$wine_launch_script_name" | awk -F '=' '{print $2}' | tr -d '"')"
+        proton_runner="$(echo "$proton_runner" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
+    fi
+
+    if [ -z "$proton_runner" ] || [ ! -x "$proton_runner/proton" ]; then
+        message warning "No valid Proton runner is configured for this install.\n\nSet a Proton runner first from 'Manage Proton Runners'."
+        return 1
+    fi
+
+    # Launch package manager in GUI mode for this target prefix.
+    # protontricks --gui always opens the Steam app picker first, so use
+    # winetricks directly with the selected Proton environment.
+    export WINEPREFIX="$wine_prefix"
+    export STEAM_COMPAT_DATA_PATH="$wine_prefix"
+    export PROTONPATH="$proton_runner"
+    export UMU_ID=0
+    export STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$proton_runner}"
+
+    launcher_winepath=""
+    if [ -x "$proton_runner/files/bin/wine" ]; then
+        launcher_winepath="$proton_runner/files/bin"
+    elif [ -x "$proton_runner/bin/wine" ]; then
+        launcher_winepath="$proton_runner/bin"
+    fi
+
+    if [ -z "$launcher_winepath" ]; then
+        message error "Unable to locate wine binaries in the selected Proton runner:\n\n$proton_runner"
+        return 1
+    fi
+
+    winetricks_bin="$(command -v winetricks 2>/dev/null || true)"
+    if [ -z "$winetricks_bin" ] || [ ! -x "$winetricks_bin" ]; then
+        message error "winetricks is required to open the package manager GUI.\n\nPlease install winetricks and retry."
+        return 1
+    fi
+
+    export WINE="$launcher_winepath/wine"
+    export WINESERVER="$launcher_winepath/wineserver"
+
+    debug_print continue "Launching package manager for prefix: $wine_prefix"
+    "$winetricks_bin" --gui
+    exit_code="$?"
+
+    if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
+        message warning "Package manager exited with code $exit_code. See terminal output for details."
+        return 1
+    fi
+
+    return 0
+}
+
 # MARK: install_powershell()
 # Install powershell verb into the game's wine prefix
 install_powershell() {
-    # Download winetricks
-    download_winetricks
+    # Download protontricks
+    download_protontricks
 
-    # Abort if the winetricks download failed
+    # Abort if the protontricks download failed
     if [ "$?" -eq 1 ]; then
-        message error "Unable to install powershell without winetricks. Aborting."
+        message error "Unable to install PowerShell without protontricks. Aborting."
         return 1
     fi
 
@@ -2322,7 +3080,7 @@ install_powershell() {
 
     # Install powershell
     debug_print continue "Installing PowerShell into ${wine_prefix}..."
-    "$winetricks_bin" -q powershell
+    "$protontricks_bin" -q powershell
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
@@ -2608,12 +3366,12 @@ install_dxvk() {
 # Expects that getdirs has already been called
 # Expects that the env vars WINE, WINESERVER, and WINEPREFIX are already set
 install_standard_dxvk() {
-    # Download winetricks
-    download_winetricks
+    # Download protontricks
+    download_protontricks
 
-    # Abort if the winetricks download failed
+    # Abort if the protontricks download failed
     if [ "$?" -eq 1 ]; then
-        message error "Unable to update dxvk without winetricks. Aborting."
+        message error "Unable to update DXVK without protontricks. Aborting."
         return 1
     fi
 
@@ -2623,7 +3381,7 @@ install_standard_dxvk() {
     debug_print continue "Updating DXVK in ${wine_prefix}..."
 
     # Update dxvk
-    "$winetricks_bin" -f dxvk
+    "$protontricks_bin" -f dxvk
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
@@ -2737,12 +3495,12 @@ install_async_dxvk() {
 # Expects that getdirs has already been called
 # Expects that the env vars WINE, WINESERVER, and WINEPREFIX are already set
 install_dxvk_nvapi() {
-    # Download winetricks
-    download_winetricks next
+    # Download protontricks
+    download_protontricks next
 
-    # Abort if the winetricks download failed
+    # Abort if the protontricks download failed
     if [ "$?" -eq 1 ]; then
-        message error "Unable to install dxvk_nvapi without winetricks. Aborting."
+        message error "Unable to install dxvk_nvapi without protontricks. Aborting."
         return 1
     fi
 
@@ -2752,7 +3510,7 @@ install_dxvk_nvapi() {
     debug_print continue "Installing DXVK-NVAPI in ${wine_prefix}..."
 
     # Update dxvk
-    "$winetricks_bin" -f dxvk_nvapi
+    "$protontricks_bin" -f dxvk_nvapi
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
@@ -2864,11 +3622,44 @@ install_game() {
     #wine_path="$install_dir/runners/$downloaded_item_name/bin"
     #fi #### Note: End of previous if statement commented out due to new EAC requirements
 
-    # Download winetricks
-    download_winetricks
-    # Abort if the winetricks download failed
+    # Ensure a runner is available in the new prefix. If none exists, offer to download the default runner.
+    download_dir="$install_dir/runners"
+    mkdir -p "$download_dir"
+    found_runner=0
+    for d in "$download_dir"/*; do
+        if [ -d "$d" ]; then
+            found_runner=1
+            break
+        fi
+    done
+    if [ "$found_runner" -eq 0 ]; then
+        if message question "No runner was found in the new prefix at:\n\n$download_dir\n\nWould you like to download the default runner now?"; then
+            # download_wine will install the default runner into $download_dir
+            download_dir="$download_dir"
+            download_wine
+            if [ "$?" -eq 1 ]; then
+                message error "Failed to download the default runner. Installation cannot proceed."
+                cleanup_conf_if_only_firstrun
+                return 1
+            fi
+            # Persist the installed runner so menus and desktop icons detect it
+            if [ -n "${downloaded_item_name:-}" ]; then
+                install_dir="${install_dir:-$wine_prefix}"
+                mkdir -p "$install_dir"
+                echo "${install_dir}/runners/${downloaded_item_name}" > "$install_dir/current_runner"
+                chmod 644 "$install_dir/current_runner" 2>/dev/null || true
+            fi
+        else
+            message error "A runner is required to proceed. Aborting installation."
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+    fi
+
+    # Download protontricks and abort if it fails
+    download_protontricks
     if [ "$?" -eq 1 ]; then
-        message error "Unable to install Falcon BMS without winetricks. Aborting."
+        message error "Unable to install Falcon BMS without protontricks. Aborting."
         cleanup_conf_if_only_firstrun
         return 1
     fi
@@ -2899,7 +3690,7 @@ install_game() {
     # Create the new prefix and install powershell
     progress_update "Installing required components into the Wine prefix..."
     debug_print continue "Installing required components into the Wine prefix. Please wait; this will take a moment..."
-    "$winetricks_bin" -q corefonts lucida verdana dxvk powershell dotnet48 win11 >"$tmp_install_log" 2>&1
+    "$protontricks_bin" -q corefonts lucida verdana dxvk powershell dotnet48 win11 >"$tmp_install_log" 2>&1
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
@@ -2995,6 +3786,12 @@ install_game() {
     # Copy game launch script to the wine prefix root directory
     debug_print continue "Copying game launch script to ${install_dir}..."
 
+    # Generate or refresh the per-prefix launcher script
+    if ! create_or_update_launch_script; then
+        message warning "Failed to generate launch script at $install_dir/$wine_launch_script_name"
+    fi
+    installed_launch_script="$install_dir/$wine_launch_script_name"
+
     # Copy the bundled Falcon BMS icon to the .local icons directory
     if [ -f "$bms_icon" ]; then
         mkdir -p "${data_dir}/icons/hicolor/256x256/apps" && 
@@ -3049,6 +3846,58 @@ create_desktop_files() {
     # Use the configured base dir (public vs internal) when building Exec/Path
     escaped_base_dir="$(echo "$bms_base_dir" | sed "s/\\\\/\\\\\\\\/g; s/'/\\'"/g)"
     icon_installed_path="${data_dir}/icons/hicolor/256x256/apps/$(basename "$bms_icon")"
+
+    # Ensure install_dir is set (fallback to wine_prefix)
+    install_dir="${install_dir:-$wine_prefix}"
+
+    # Ensure launch script exists and is up to date
+    create_or_update_launch_script || true
+
+    # $HOME/Games/Falcon-BMS/Falcon BMS.desktop
+    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
+
+    # Detect configured runner (prefer Proton) from persisted file or the launch script and prefer its proton binary
+    runner_exec="wine"
+    launch_script=""
+    if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
+        if [ -n "$wine_launch_script_name" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
+            launch_script="$wine_prefix/$wine_launch_script_name"
+        else
+            for f in "$wine_prefix"/*; do
+                if [ -f "$f" ] && (grep -q -e '^export proton_path=' -e '^proton_path=' "$f" 2>/dev/null || grep -q -e '^export wine_path=' -e '^wine_path=' "$f" 2>/dev/null); then
+                    launch_script="$f"
+                    break
+                fi
+            done
+        fi
+    fi
+    if [ -n "$launch_script" ]; then
+        # Prefer proton_path if available, otherwise fall back to wine_path
+        launcher_path="$(grep -e '^export proton_path=' -e '^proton_path=' "$launch_script" | awk -F '=' '{print $2}' | tr -d '"')"
+        if [ -z "$launcher_path" ]; then
+            launcher_path="$(grep -e '^export wine_path=' -e '^wine_path=' "$launch_script" | awk -F '=' '{print $2}' | tr -d '"')"
+        fi
+        launcher_path="$(echo "$launcher_path" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
+        if [ -n "$launcher_path" ] && [ -x "$launcher_path/proton" ]; then
+            runner_exec="$launcher_path/proton"
+        elif [ -n "$launcher_path" ] && [ -x "$launcher_path/wine" ]; then
+            runner_exec="$launcher_path/wine"
+        fi
+    fi
+
+    # If a persisted current runner file exists in the install dir, prefer it
+    if [ -f "$install_dir/current_runner" ]; then
+        persisted_runner="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
+        if [ -n "$persisted_runner" ] && [ -x "$persisted_runner/proton" ]; then
+            runner_exec="$persisted_runner/proton"
+        elif [ -n "$persisted_runner" ] && [ -x "$persisted_runner/wine" ]; then
+            runner_exec="$persisted_runner/wine"
+        fi
+    fi
+
+    # Desktop entries now launch through the generated prefix script
+    exec_line="Exec=\"$install_dir/$wine_launch_script_name\""
+
     echo "[Desktop Entry]
 Name=$bms_base_dir Launcher
 Type=Application
@@ -3058,7 +3907,7 @@ Terminal=false
 StartupNotify=true
 Categories=Game;
 StartupWMClass=FalconBMS_Alternative_Launcher.exe
-Exec=env WINEPREFIX=\"$install_dir\" wine 'C:\\\\$escaped_base_dir\\\\Launcher\\\\FalconBMS_Alternative_Launcher.exe' ''
+$exec_line
 Path=$install_dir/drive_c/$bms_base_dir/Launcher/
 Icon=bms-launcher" > "$prefix_desktop_file"
 
@@ -3126,6 +3975,81 @@ remove_gog_falcon4_desktop() {
     fi
 }
 
+# MARK: set_latest_default_runner()
+# Resolve the latest default runner from runner_sources and keep only archive
+# formats supported by download_install().
+set_latest_default_runner() {
+    # Prefer GE-Proton as the default source for new installs.
+    # Fallback to the first source if GE-Proton is not present.
+    default_runner_source=0
+    default_runner_file=""
+    default_runner=""
+
+    for (( i=0; i<"${#runner_sources[@]}"; i=i+2 )); do
+        if [ "${runner_sources[i]}" = "GE-Proton" ]; then
+            default_runner_source="$i"
+            break
+        fi
+    done
+
+    # runner_sources stores pairs: description url
+    default_runner_name="${runner_sources[$default_runner_source]}"
+    default_runner_api="${runner_sources[$default_runner_source+1]}"
+
+    if [ -z "$default_runner_api" ]; then
+        return 1
+    fi
+
+    # Parse downloadable assets and keep supported archive formats only.
+    # Exclude checksums and text sidecar files.
+    # Prefer PROTON_DEFAULT_VERSION if it exists in the release list, else fallback to latest.
+    while IFS= read -r asset; do
+        case "$asset" in
+            *.tar.gz|*.tgz|*.tar.xz|*.tar.zst)
+                if [ -z "$default_runner_file" ]; then
+                    default_runner_file="$asset" # store the first available (latest) as fallback
+                fi
+                # Check if the asset matches the PROTON_DEFAULT_VERSION
+                if echo "$asset" | grep -q "${PROTON_DEFAULT_VERSION}"; then
+                    default_runner_file="$asset" # override with the requested version
+                    break                        # break early as we found the preferred
+                fi
+                ;;
+        esac
+    done < <(
+        curl -s "${default_runner_api}?per_page=${max_download_items:-50}" |
+            grep -Eo '"browser_download_url": ?"[^"]+"' |
+            cut -d '"' -f4 |
+            cut -d '?' -f1 |
+            xargs -n1 basename |
+            grep -viE 'sha|sum|txt|\.ini$'
+    )
+
+    if [ -z "$default_runner_file" ]; then
+        return 1
+    fi
+
+    case "$default_runner_file" in
+        *.tar.gz)
+            default_runner="$(basename "$default_runner_file" .tar.gz)"
+            ;;
+        *.tgz)
+            default_runner="$(basename "$default_runner_file" .tgz)"
+            ;;
+        *.tar.xz)
+            default_runner="$(basename "$default_runner_file" .tar.xz)"
+            ;;
+        *.tar.zst)
+            default_runner="$(basename "$default_runner_file" .tar.zst)"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
 # MARK: download_wine()
 # Download a default wine runner for use by the installer
 # Expects download_dir to be set before calling
@@ -3169,33 +4093,19 @@ download_wine() {
     fi
 }
 
-# MARK: download_winetricks()
-# Download winetricks to a temporary file
-# Accepts an optional string argument "next" to download the latest -next version instead of the stable release
-download_winetricks() {
-    # Set variables for the latest winetricks urls
-    set_latest_winetricks
+## Winetricks removed: protontricks is used instead. See download_protontricks().
 
-    if [ "$1" = "next" ]; then
-        # Download the -next version
-        download_file "$winetricks_next_url" "winetricks" "winetricks"
-    else
-        # Download the stable version
-        download_file "$winetricks_url" "winetricks" "winetricks"
-    fi
-
-    # Sanity check
-    if [ ! -f "$tmp_dir/winetricks" ]; then
-        # Something went wrong with the download and the file doesn't exist
-        message error "Something went wrong; winetricks could not be downloaded!"
+# MARK: download_protontricks()
+# Resolve protontricks to the OS-installed binary.
+# Kept as a compatibility wrapper for existing callers.
+download_protontricks() {
+    protontricks_bin="$(command -v protontricks 2>/dev/null || true)"
+    if [ -z "$protontricks_bin" ] || [ ! -x "$protontricks_bin" ]; then
+        message error "Unable to locate protontricks. Please install protontricks and retry."
         return 1
     fi
 
-    # Save the path to the downloaded binary
-    winetricks_bin="$tmp_dir/winetricks"
-
-    # Make it executable
-    chmod +x "$winetricks_bin"
+    return 0
 }
 
 # MARK: download_gog_installer()
@@ -3389,15 +4299,6 @@ download_bms_installer() {
     # Don't show a popup on successful selection to reduce interruptions
     debug_print continue "Falcon BMS installer selected: $selected_bms_installer (use_16k_tiles=$use_16k_tiles bms_key=$bms_key)"
     return 0
-}
-
-# MARK: set_latest_winetricks()
-# Fetch and store variables for the latest winetricks download urls
-set_latest_winetricks() {
-    # Winetricks download url
-    winetricks_version="$(get_latest_release Winetricks/winetricks)"
-    winetricks_url="https://raw.githubusercontent.com/Winetricks/winetricks/refs/tags/${winetricks_version}/src/winetricks"
-    winetricks_next_url="https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks"
 }
 
 # MARK: get_latest_release()
@@ -3642,9 +4543,10 @@ while true; do
     quit_msg="Quit"
 
     # Set the options to be displayed in the menu
-    menu_options=("$preflight_msg" "$install_msg_wine" "$maintenance_msg" "$quit_msg")
+    proton_msg="Manage Proton Runners"
+    menu_options=("$preflight_msg" "$install_msg_wine" "$proton_msg" "$maintenance_msg" "$quit_msg")
     # Set the corresponding functions to be called for each of the options
-    menu_actions=("preflight_check" "$install_action" "maintenance_menu" "quit")
+    menu_actions=("preflight_check" "$install_action" "proton_manage" "maintenance_menu" "quit")
 
     # Calculate the total height the menu should be
     # menu_option_height = pixels per menu option
