@@ -3690,7 +3690,7 @@ install_game() {
     # Create the new prefix and install powershell
     progress_update "Installing required components into the Wine prefix..."
     debug_print continue "Installing required components into the Wine prefix. Please wait; this will take a moment..."
-    "$protontricks_bin" -q corefonts lucida verdana dxvk powershell dotnet48 win11 >"$tmp_install_log" 2>&1
+    "$protontricks_bin" -q corefonts tahoma lucida verdana dxvk powershell dotnet48 win11 >"$tmp_install_log" 2>&1
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
@@ -3707,6 +3707,15 @@ install_game() {
 
     # Add registry key that prevents wine from creating unnecessary file type associations
     wine reg add "HKEY_CURRENT_USER\Software\Wine\FileOpenAssociations" /v Enable /d N /f >>"$tmp_install_log" 2>&1
+
+    # Fix oversized fonts in the WPF / MahApps.Metro .NET Launcher
+    progress_update "Applying display scaling and font fixes..."
+    debug_print continue "Downloading and installing original Segoe UI fonts..."
+    curl -sL "https://github.com/mrbvrz/segoe-ui-linux/archive/refs/heads/master.tar.gz" | tar -xz -C "$tmp_dir"
+    cp "$tmp_dir"/segoe-ui-linux-master/font/*.ttf "$install_dir/drive_c/windows/Fonts/" 2>/dev/null || true
+    
+    wine reg add "HKEY_CURRENT_USER\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 96 /f >>"$tmp_install_log" 2>&1
+
 
     # Run the Falcon 4.0 GoG installer
     debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
