@@ -189,7 +189,7 @@ set_bms_mode "$bms_mode"
 # Default Proton GE version to preselect on first install. Change this
 # to another version basename (example: "GE-Proton10-18") if you want
 # a different default when the Proton list is shown for the first time.
-PROTON_DEFAULT_VERSION="GE-Proton10-18"
+PROTON_DEFAULT_VERSION="GE-Proton10-32"
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # Path to bundled icon
@@ -1140,7 +1140,7 @@ fi
 # Keep desktop entries stable and favor native .NET runtime components.
 # mscoree=n prevents accidental fallback to Wine Mono for .NET Framework apps.
 export WINEDLLOVERRIDES="winemenubuilder.exe=d;mscoree=n,b"
-export WINEDEBUG=-all
+export WINEDEBUG="\${WINEDEBUG:--all}"
 unset SDL_VIDEODRIVER
 
 # Managed runner paths (updated by bms-helper)
@@ -1163,7 +1163,7 @@ if [ -n "\$proton_path" ]; then
     fi
 fi
 
-launcher_exe="$launcher_exe_unix"
+launcher_exe="\${BMS_LAUNCHER_EXE:-$launcher_exe_unix}"
 bms_reg_path="HKLM\\Software\\Benchmark Sims\\$bms_base_dir"
 bms_reg_path_wow="HKLM\\Software\\WOW6432Node\\Benchmark Sims\\$bms_base_dir"
 
@@ -1273,6 +1273,88 @@ sync_registry_for_proton_run() {
     done
 }
 
+ensure_wine_vr_key() {
+    # wineopenxr.dll uses RegOpenKeyExA on HKCU\\Software\\Wine\\VR to read
+    # WiVRn's required Vulkan extension lists. This key is normally written by
+    # steam_helper (requires Steam running); without it the OpenXR session init
+    # fails with XR_ERROR_RUNTIME_FAILURE (-6). Pre-populate it so VR works
+    # with umu-run without Steam.
+    if [ -z "\$proton_path" ] || [ ! -x "\$proton_path/proton" ]; then
+        return 0
+    fi
+    local compat_client_path="\${STEAM_COMPAT_CLIENT_INSTALL_PATH:-\$proton_path}"
+    # Write a Windows .reg file to drive_c/ (visible as C:\\ inside Wine),
+    # then import it with regedit in one proton invocation.
+    local reg_file="\$WINEPREFIX/drive_c/wivrn_vr_init.reg"
+    # Auto-detect VR-capable GPU (prefer discrete over integrated).
+    # wineopenxr reads openxr_vulkan_device_vid/pid to select the GPU;
+    # without them init fails with status 0x2 (key not found).
+    local _vk_vid="" _vk_pid=""
+    if ! command -v vulkaninfo >/dev/null 2>&1; then
+        echo "WARNING: vulkaninfo not found. Install vulkan-tools for GPU auto-detection." >> "\$launch_log"
+    fi
+    if command -v vulkaninfo >/dev/null 2>&1; then
+        # Pick the first DISCRETE_GPU; fall back to first device.
+        eval "\$(vulkaninfo --summary 2>/dev/null | awk '
+            /vendorID/{vid=\$3}
+            /deviceID/{did=\$3}
+            /DISCRETE_GPU/{print "_vk_vid=" vid " _vk_pid=" did; found=1; exit}
+            END{if(!found && vid) print "_vk_vid=" vid " _vk_pid=" did}
+        ')"
+    fi
+    # Pad to 4-hex-digit dwords for the .reg file (strip 0x prefix).
+    local vid_dword="\$(printf '%08x' "\${_vk_vid:-0}" 2>/dev/null)"
+    local pid_dword="\$(printf '%08x' "\${_vk_pid:-0}" 2>/dev/null)"
+    cat > "\$reg_file" <<REGEOF
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Wine\VR]
+"openxr_vulkan_instance_extensions"="VK_KHR_external_fence_capabilities VK_KHR_external_memory_capabilities VK_KHR_external_semaphore_capabilities VK_KHR_get_physical_device_properties2"
+"openxr_vulkan_device_extensions"="VK_KHR_dedicated_allocation VK_KHR_external_fence VK_KHR_external_memory VK_KHR_external_semaphore VK_KHR_get_memory_requirements2 VK_KHR_image_format_list VK_KHR_external_memory_fd VK_KHR_external_semaphore_fd VK_KHR_external_fence_fd"
+"state"=dword:00000001
+"is_hmd_present"=dword:00000001
+"openxr_vulkan_device_vid"=dword:\$vid_dword
+"openxr_vulkan_device_pid"=dword:\$pid_dword
+REGEOF
+    env WINEPREFIX="\$WINEPREFIX" \\
+        STEAM_COMPAT_DATA_PATH="\$WINEPREFIX" \\
+        STEAM_COMPAT_CLIENT_INSTALL_PATH="\$compat_client_path" \\
+        UMU_ID=0 \\
+        "\$proton_path/proton" run regedit /s "C:\\\\wivrn_vr_init.reg" >/dev/null 2>&1 || true
+    rm -f "\$reg_file"
+}
+
+ensure_wivrn_runtime_json() {
+    # The pressure-vessel container cannot see host system paths like
+    # /usr/lib/wivrn/. Build a custom XR runtime JSON under \$WINEPREFIX that
+    # uses an absolute path under \$HOME, which IS accessible in the container.
+    local xr_json_out="\$WINEPREFIX/xr-wivrn-runtime.json"
+    local home_lib="\$HOME/.local/lib/wivrn/libopenxr_wivrn.so"
+    # Search common distro paths for the system WiVRn library.
+    local sys_lib=""
+    local _search_path
+    for _search_path in \\
+        /usr/lib/wivrn/libopenxr_wivrn.so \\
+        /usr/lib/x86_64-linux-gnu/wivrn/libopenxr_wivrn.so \\
+        /usr/lib64/wivrn/libopenxr_wivrn.so \\
+        /usr/local/lib/wivrn/libopenxr_wivrn.so; do
+        if [ -f "\$_search_path" ]; then
+            sys_lib="\$_search_path"
+            break
+        fi
+    done
+    # Keep the HOME copy in sync with the system library.
+    if [ -n "\$sys_lib" ] && { [ ! -f "\$home_lib" ] || [ "\$sys_lib" -nt "\$home_lib" ]; }; then
+        mkdir -p "\$HOME/.local/lib/wivrn"
+        cp -p "\$sys_lib" "\$home_lib" 2>/dev/null || true
+    fi
+    if [ ! -f "\$home_lib" ]; then
+        return 1  # No WiVRn library found; caller falls back to system JSON
+    fi
+    printf '{\\n    "file_format_version": "1.0.0",\\n    "runtime": {\\n        "name": "WiVRn",\\n        "library_path": "%s"\\n    }\\n}\\n' "\$home_lib" > "\$xr_json_out"
+    echo "\$xr_json_out"
+}
+
 check_dotnet48() {
     # .NET Framework 4.8 release key threshold (Windows 10 May 2019 update and later)
     min_release=528040
@@ -1351,6 +1433,9 @@ sync_registry_view
 sync_registry_into_proton_pfx
 sync_registry_for_proton_run
 
+# Ensure HKCU\\Software\\Wine\\VR exists so wineopenxr.dll can cache Vulkan extensions
+ensure_wine_vr_key
+
 # Warn in the launch log if .NET 4.8 is missing/outdated for launcher apps that require it
 check_dotnet48 || true
 
@@ -1420,15 +1505,42 @@ if [ "\$use_proton_launcher" = "1" ] && [ "\$proton_available" = "1" ]; then
     # Use an explicit override only if the user provides one.
     compat_client_path="\${STEAM_COMPAT_CLIENT_INSTALL_PATH:-\$runner_root}"
 
-    echo "runner_selected=proton proton_bin=\$proton_path/proton compat_client_path=\$compat_client_path" >> "\$launch_log"
-
-    env WINEPREFIX="\$WINEPREFIX" \
-        STEAM_COMPAT_DATA_PATH="\$WINEPREFIX" \
-        STEAM_COMPAT_CLIENT_INSTALL_PATH="\$compat_client_path" \
-        UMU_ID=0 \
-        PROTON_LOG=1 \
-        "\$proton_path/proton" run "\$(basename "\$launcher_exe")" >> "\$launch_log" 2>&1
-    proton_exit=\$?
+    _umu_bin="\$(command -v umu-run 2>/dev/null)"
+    # Use umu-run by default when available: it always sets up the pressure-vessel
+    # container which is required for VR (wineopenxr socket access).
+    # Set BMS_UMU_LAUNCH=0 to force plain Proton instead.
+    if [ -n "\$_umu_bin" ] && [ "\${BMS_UMU_LAUNCH:-1}" != "0" ]; then
+        echo "runner_selected=umu umu_bin=\$_umu_bin proton_path=\$proton_path" >> "\$launch_log"
+        # PRESSURE_VESSEL_FILESYSTEMS_RW exposes the WiVRn socket to the container.
+        # XR_RUNTIME_JSON points wineopenxr to the active OpenXR runtime.
+        # Use caller-provided values if set, otherwise fall back to WiVRn defaults.
+        _wivrn_socket="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}/wivrn/comp_ipc"
+        _wivrn_lib_dir="\$HOME/.local/lib/wivrn"
+        _pv_fs_rw="\${PRESSURE_VESSEL_FILESYSTEMS_RW:-\$_wivrn_socket:\$_wivrn_lib_dir}"
+        if [ -z "\${XR_RUNTIME_JSON:-}" ]; then
+            _xr_json="\$(ensure_wivrn_runtime_json || echo "\$HOME/.config/openxr/1/active_runtime.json")"
+        else
+            _xr_json="\$XR_RUNTIME_JSON"
+        fi
+        echo "umu_env XR_RUNTIME_JSON=\$_xr_json PRESSURE_VESSEL_FILESYSTEMS_RW=\$_pv_fs_rw" >> "\$launch_log"
+        env GAMEID=0 \
+            PROTONPATH="\$proton_path" \
+            STEAM_COMPAT_DATA_PATH="\$WINEPREFIX" \
+            WINEPREFIX="\$WINEPREFIX" \
+            XR_RUNTIME_JSON="\$_xr_json" \
+            PRESSURE_VESSEL_FILESYSTEMS_RW="\$_pv_fs_rw" \
+            "\$_umu_bin" "\$launcher_exe" \${BMS_EXTRA_ARGS} >> "\$launch_log" 2>&1
+        proton_exit=\$?
+    else
+        echo "runner_selected=proton proton_bin=\$proton_path/proton compat_client_path=\$compat_client_path" >> "\$launch_log"
+        env WINEPREFIX="\$WINEPREFIX" \
+            STEAM_COMPAT_DATA_PATH="\$WINEPREFIX" \
+            STEAM_COMPAT_CLIENT_INSTALL_PATH="\$compat_client_path" \
+            UMU_ID=0 \
+            PROTON_LOG=1 \
+            "\$proton_path/proton" run "\$(basename "\$launcher_exe")" \${BMS_EXTRA_ARGS} >> "\$launch_log" 2>&1
+        proton_exit=\$?
+    fi
     echo "proton_exit_code=\$proton_exit" >> "\$launch_log"
     if [ "\$proton_exit" -eq 0 ]; then
         exit 0
@@ -1454,7 +1566,7 @@ elif command -v wine >/dev/null 2>&1; then
 fi
 echo "runner_selected=wine wine_bin=\$wine_bin" >> "\$launch_log"
 
-run_wine "\$(basename "\$launcher_exe")" >> "\$launch_log" 2>&1
+run_wine "\$(basename "\$launcher_exe")" \${BMS_EXTRA_ARGS} >> "\$launch_log" 2>&1
 wine_exit=\$?
 echo "wine_exit_code=\$wine_exit" >> "\$launch_log"
 exit \$wine_exit
@@ -3622,6 +3734,25 @@ install_game() {
     #wine_path="$install_dir/runners/$downloaded_item_name/bin"
     #fi #### Note: End of previous if statement commented out due to new EAC requirements
 
+    # Runner download/check moved to after installer selection to simplify first-run flow
+
+    # Download protontricks and abort if it fails
+    download_protontricks
+    if [ "$?" -eq 1 ]; then
+        message error "Unable to install Falcon BMS without protontricks. Aborting."
+        cleanup_conf_if_only_firstrun
+        return 1
+    fi
+
+    download_gog_installer
+    download_bms_installer
+    # Abort if the download failed
+    if [ "$?" -eq 1 ]; then
+        message error "Unable to install Falcon BMS. Aborting."
+        cleanup_conf_if_only_firstrun
+        return 1
+    fi
+
     # Ensure a runner is available in the new prefix. If none exists, offer to download the default runner.
     download_dir="$install_dir/runners"
     mkdir -p "$download_dir"
@@ -3654,23 +3785,6 @@ install_game() {
             cleanup_conf_if_only_firstrun
             return 1
         fi
-    fi
-
-    # Download protontricks and abort if it fails
-    download_protontricks
-    if [ "$?" -eq 1 ]; then
-        message error "Unable to install Falcon BMS without protontricks. Aborting."
-        cleanup_conf_if_only_firstrun
-        return 1
-    fi
-
-    download_gog_installer
-    download_bms_installer
-    # Abort if the download failed
-    if [ "$?" -eq 1 ]; then
-        message error "Unable to install Falcon BMS. Aborting."
-        cleanup_conf_if_only_firstrun
-        return 1
     fi
 
     # Create a temporary log file
