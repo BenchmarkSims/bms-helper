@@ -3804,7 +3804,10 @@ install_game() {
         return 1
     fi
 
-    download_gog_installer
+    use_steam=$(message options "GOG" "Steam" "Which storefront did you use to purchase Falcon 4.0?")
+    if ! $use_steam; then
+        download_gog_installer
+    fi
     download_bms_installer
     # Abort if the download failed
     if [ "$?" -eq 1 ]; then
@@ -3893,11 +3896,19 @@ install_game() {
 
     # Run the Falcon 4.0 GoG installer
     debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
-    progress_update "Running Falcon 4.0 GoG installer..."
-    if [ -n "$selected_gog_installer" ]; then
-        wine "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+    if ! $use_steam; then
+        progress_update "Running Falcon 4.0 GoG installer..."
+        if [ -n "$selected_gog_installer" ]; then
+            wine "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        else
+            wine "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        fi
     else
-        wine "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        progress_update "Installing Falcon 4.0 through Steam..."
+        message info "The script will now download and run Steam. Please log in, install Falcon 4.0, and launch it."
+        curl -o "SteamSetup.exe" "https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe"
+        wine "SteamSetup.exe"
+        message info "Please install Falcon 4.0, run it once, and exit the game. The script will continue after closing this popup."
     fi
 
     # Run the Falcon BMS installer
