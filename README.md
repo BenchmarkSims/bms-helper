@@ -93,5 +93,6 @@ The launcher still supports `--proton`, `--wine`, and `--auto` to select the run
 
 - It is started automatically if the file exists either next to the launcher or in `tools/`.
 - It requires `python3` and the Python `evdev` package.
+- Place the script in the falcon-bms master folder (the one created by wine / proton) along side `bms-launcher.sh`
 - On most systems you will also need permissions for `uinput` and access to the source input devices.
 
