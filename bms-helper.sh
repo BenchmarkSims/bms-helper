@@ -96,6 +96,7 @@ set_bms_mode() {
         internal)
             bms_mode="internal"
             bms_dirname="falcon-bms-internal"
+            bms_desktop_basename="Falcon BMS Internal.desktop"
             bms_default_install_path="$HOME/Games/$bms_dirname"
             conf_subdir="falcon-bms-internal"
             bms_base_dir="Falcon BMS 4.38 (Internal)"
@@ -105,6 +106,7 @@ set_bms_mode() {
         *)
             bms_mode="public"
             bms_dirname="falcon-bms"
+            bms_desktop_basename="Falcon BMS.desktop"
             bms_default_install_path="$HOME/Games/$bms_dirname"
             conf_subdir="falcon-bms"
             bms_base_dir="Falcon BMS 4.38"
@@ -124,15 +126,15 @@ refresh_desktop_execs() {
     getdirs || return 1
 
     # Paths to the desktop files (same as create_desktop_files)
-    localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
-    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+    localshare_desktop_file="${data_dir}/applications/$bms_desktop_basename"
+    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/$bms_desktop_basename"
 
     # Ensure install_dir is set (fallback to wine_prefix)
     install_dir="${install_dir:-$wine_prefix}"
 
     # Ensure launch script exists and is up to date
     create_or_update_launch_script || true
-    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
+    prefix_desktop_file="$install_dir/$bms_desktop_basename"
 
     # Prefer a persisted current runner in the install dir
     proton_candidate=""
@@ -3571,9 +3573,12 @@ uninstall_bms() {
     fi
 
     install_dir="$wine_prefix"
-    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
-    localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
-    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+    prefix_desktop_file="$install_dir/$bms_desktop_basename"
+    localshare_desktop_file="${data_dir}/applications/$bms_desktop_basename"
+    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/$bms_desktop_basename"
+    legacy_localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
+    legacy_home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+    legacy_prefix_desktop_file="$install_dir/Falcon BMS.desktop"
     icon_file="${data_dir}/icons/hicolor/256x256/apps/bms-launcher.png"
 
     if ! message question "This will permanently delete the Falcon BMS installation at:\n\n$install_dir\n\nand remove desktop shortcuts and icon. Continue?"; then
@@ -3592,6 +3597,8 @@ uninstall_bms() {
 
     # Remove desktop files and icon
     rm -f -- "$prefix_desktop_file" "$localshare_desktop_file" "$home_desktop_file"
+    # Also remove legacy shortcut names used before mode-specific desktop files.
+    rm -f -- "$legacy_prefix_desktop_file" "$legacy_localshare_desktop_file" "$legacy_home_desktop_file"
     rm -f -- "$icon_file"
 
     # Update desktop database
@@ -4167,12 +4174,12 @@ create_desktop_files() {
         debug_print exit "Script error: The string 'wine_prefix' was not set before calling the create_desktop_files function. Aborting."
     fi
 
-    # $HOME/Games/Falcon-BMS/Falcon BMS.desktop
-    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
-    # $HOME/.local/share/applications/Falcon BMS.desktop
-    localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
-    # $HOME/Desktop/Falcon BMS.desktop
-    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+    # $HOME/Games/Falcon-BMS/<desktop file>
+    prefix_desktop_file="$install_dir/$bms_desktop_basename"
+    # $HOME/.local/share/applications/<desktop file>
+    localshare_desktop_file="${data_dir}/applications/$bms_desktop_basename"
+    # $HOME/Desktop/<desktop file>
+    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/$bms_desktop_basename"
 
     create_desktop_files="true"
     # If the "needed" argument is passed, determine if we need to create system desktop files
@@ -4195,8 +4202,8 @@ create_desktop_files() {
     # Ensure launch script exists and is up to date
     create_or_update_launch_script || true
 
-    # $HOME/Games/Falcon-BMS/Falcon BMS.desktop
-    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
+    # $HOME/Games/Falcon-BMS/<desktop file>
+    prefix_desktop_file="$install_dir/$bms_desktop_basename"
 
     # Detect configured runner (prefer Proton) from persisted file or the launch script and prefer its proton binary
     runner_exec="wine"
