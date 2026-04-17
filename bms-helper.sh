@@ -1013,6 +1013,7 @@ getdirs() {
 get_current_runner() {
     current_runner_path=""
     current_runner_basename=""
+    launcher_winepath=""
 
     # Ensure wine_prefix and install_dir are available
     getdirs || return 1
@@ -1024,6 +1025,13 @@ get_current_runner() {
         if [ -n "$persisted_runner" ] && [ -d "$persisted_runner" ]; then
             current_runner_path="$persisted_runner"
             current_runner_basename="$(basename "$persisted_runner")"
+            if [ -x "$persisted_runner/files/bin/wine" ]; then
+                launcher_winepath="$persisted_runner/files/bin"
+            elif [ -x "$persisted_runner/bin/wine" ]; then
+                launcher_winepath="$persisted_runner/bin"
+            elif [ -x "$persisted_runner/wine" ]; then
+                launcher_winepath="$persisted_runner"
+            fi
             return 0
         fi
     fi
@@ -1047,9 +1055,30 @@ get_current_runner() {
             fi
             launcher_path="$(echo "$launcher_path" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
             if [ -n "$launcher_path" ]; then
-                current_runner_path="$launcher_path"
-                current_runner_basename="$(basename "$launcher_path")"
+                if [ -x "$launcher_path/wine" ]; then
+                    launcher_winepath="$launcher_path"
+                    current_runner_path="$(dirname "$launcher_path")"
+                elif [ -x "$launcher_path/files/bin/wine" ]; then
+                    launcher_winepath="$launcher_path/files/bin"
+                    current_runner_path="$launcher_path"
+                elif [ -x "$launcher_path/bin/wine" ]; then
+                    launcher_winepath="$launcher_path/bin"
+                    current_runner_path="$launcher_path"
+                else
+                    current_runner_path="$launcher_path"
+                fi
+                current_runner_basename="$(basename "$current_runner_path")"
             fi
+        fi
+    fi
+
+    if [ -z "$launcher_winepath" ] && [ -n "$current_runner_path" ]; then
+        if [ -x "$current_runner_path/files/bin/wine" ]; then
+            launcher_winepath="$current_runner_path/files/bin"
+        elif [ -x "$current_runner_path/bin/wine" ]; then
+            launcher_winepath="$current_runner_path/bin"
+        elif [ -x "$current_runner_path/wine" ]; then
+            launcher_winepath="$current_runner_path"
         fi
     fi
     return 0
@@ -2218,7 +2247,7 @@ download_manage() {
         unset post_download_required
 
         # Set variables for the current wine runner configured in the launch script
-        if [ "$download_type" = "runner" ]; then
+        if [ "$download_type" = "runner" ] || [ "$download_type" = "proton" ]; then
             get_current_runner
         fi
 
@@ -2311,6 +2340,12 @@ proton_manage() {
 
     # Get directories so we know where the wine prefix is
     getdirs
+
+    set_latest_default_runner
+    if [ "$?" -eq 1 ]; then
+        message error "Could not fetch the latest default Proton runner. The Github API may be down or rate limited."
+        return 1
+    fi
 
     # Set the download directory for proton runners
     download_dir="$wine_prefix/runners"
@@ -2537,40 +2572,8 @@ download_select_install() {
     # To add new file extensions, handle them here and in
     # the download_install function
 
-    # If listing Proton runners, attempt to detect the currently
-    # configured Proton runner from the launch script so we can mark
-    # it as "(in use)" in the menu.
     if [ "$download_type" = "proton" ]; then
-        # Ensure install_dir is set so we can read persisted runner info
-        install_dir="${install_dir:-$wine_prefix}"
-        current_runner_basename=""
-        launch_script=""
-        if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
-            if [ -n "$wine_launch_script_name" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
-                launch_script="$wine_prefix/$wine_launch_script_name"
-            else
-                for f in "$wine_prefix"/*; do
-                    if [ -f "$f" ] && grep -q -e '^export proton_path=' -e '^proton_path=' "$f" 2>/dev/null; then
-                        launch_script="$f"
-                        break
-                    fi
-                done
-            fi
-        fi
-        if [ -n "$launch_script" ]; then
-            launcher_path="$(grep -e '^export proton_path=' -e '^proton_path=' "$launch_script" | awk -F '=' '{print $2}' | tr -d '"')"
-            launcher_path="$(echo "$launcher_path" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
-            if [ -n "$launcher_path" ]; then
-                current_runner_basename="$(basename "$launcher_path")"
-            fi
-        fi
-        # If a persisted current_runner exists in install dir, prefer it
-        if [ -f "$install_dir/current_runner" ]; then
-            persisted_runner="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
-            if [ -n "$persisted_runner" ]; then
-                current_runner_basename="$(basename "$persisted_runner")"
-            fi
-        fi
+        get_current_runner
     fi
 
     for (( i=0, num_download_items=0; i<${#download_versions[@]} && num_download_items<max_download_items; i++ )); do
@@ -2960,7 +2963,7 @@ download_delete() {
             debug_print continue "Deleted ${installed_items[${item_to_delete[i]}]}"
 
             # If we just deleted the currently used runner, we need to trigger post-delete to update the launch script
-            if [ "$download_type" = "runner" ] && [ "${installed_items[${item_to_delete[i]}]}" = "$current_runner_path" ]; then
+            if { [ "$download_type" = "runner" ] || [ "$download_type" = "proton" ]; } && [ "${installed_items[${item_to_delete[i]}]}" = "$current_runner_path" ]; then
                 post_delete_required="true"
             fi
 
@@ -3080,6 +3083,10 @@ post_download() {
                 mkdir -p "$install_dir"
                 echo "${post_delete_restore_value}" > "$install_dir/current_runner"
                 chmod 644 "$install_dir/current_runner" 2>/dev/null || true
+            fi
+            if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
+                create_desktop_files
+                refresh_desktop_execs
             fi
         else
             debug_print exit "Script error: Unknown post_download_required value in post_download function. Aborting."
