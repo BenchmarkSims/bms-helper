@@ -101,4 +101,5 @@ The launcher still supports `--proton`, `--wine`, and `--auto` to select the run
 - Place the script in the falcon-bms master folder (the one created by wine / proton) along side `bms-launcher.sh`
 - On most systems you will also need permissions for `uinput` and access to the source input devices.
 - By default it exclusively grabs the physical MFD evdev nodes while it is running, which hides the source devices from Wine/Proton and leaves the virtual devices as the ones the game sees. Set `BMS_MFD_GRAB_PHYSICAL=0` to disable that behavior.
+- When `mfd-joystick.py` is present beside `bms-launcher.sh`, the launcher now asks that Python file to set the Wine `Software\\Wine\\DirectInput\\Joysticks` disable entries for the original MFDs through `wine reg add` before any Wine or Proton command is run.
 

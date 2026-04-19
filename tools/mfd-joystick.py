@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 import os
+import shutil
+import subprocess
+import sys
 import threading
+
 from evdev import AbsInfo, InputDevice, UInput, ecodes
 
-MFD_JOYSTICK_VERSION = "1.0.0"
+MFD_JOYSTICK_VERSION = "1.1.1"
+
+WINE_DIRECTINPUT_JOYSTICKS_KEY = r"HKCU\Software\Wine\DirectInput\Joysticks"
+PHYSICAL_MFD_NAMES = [
+	"Thrustmaster F16 MFD 1",
+	"Thrustmaster F16 MFD 2",
+]
 
 # Configuration for MFD 1 and MFD 2
 DEVICES = [
@@ -58,6 +68,50 @@ def should_grab_physical_devices():
 	value = os.environ.get("BMS_MFD_GRAB_PHYSICAL", "1").strip().lower()
 	return value not in {"0", "false", "no", "off"}
 
+
+def resolve_wine_binary():
+	configured_wine = os.environ.get("BMS_MFD_REG_WINE_BIN", "").strip()
+	if configured_wine:
+		return configured_wine
+
+	return shutil.which("wine")
+
+
+def sync_wine_joystick_registry(prefix_arg=""):
+	wine_binary = resolve_wine_binary()
+	if not wine_binary:
+		print("Info: no usable wine binary found for MFD registry sync.")
+		return 1
+
+	env = os.environ.copy()
+	if prefix_arg:
+		env["WINEPREFIX"] = prefix_arg
+
+	for device_name in PHYSICAL_MFD_NAMES:
+		command = [
+			wine_binary,
+			"reg",
+			"add",
+			WINE_DIRECTINPUT_JOYSTICKS_KEY,
+			"/v",
+			device_name,
+			"/t",
+			"REG_SZ",
+			"/d",
+			"disabled",
+			"/f",
+		]
+		completed = subprocess.run(command, env=env, capture_output=True, text=True)
+		if completed.returncode != 0:
+			if completed.stdout:
+				print(completed.stdout.strip())
+			if completed.stderr:
+				print(completed.stderr.strip())
+			return completed.returncode
+
+	print("Updated Wine MFD registry entries through wine reg add.")
+	return 0
+
 def handle_device(config):
 	ui = None
 	dev = None
@@ -95,7 +149,11 @@ def handle_device(config):
 		if ui is not None:
 			ui.close()
 
-if __name__ == "__main__":
+def main():
+	if len(sys.argv) >= 2 and sys.argv[1] in {"--sync-wine-registry", "sync-wine-registry"}:
+		prefix_arg = sys.argv[2] if len(sys.argv) >= 3 else ""
+		return sync_wine_joystick_registry(prefix_arg)
+
 	if should_grab_physical_devices():
 		print(f"MFD combo helper v{MFD_JOYSTICK_VERSION} active with exclusive grab enabled. Press Ctrl+C to exit.")
 	else:
@@ -106,3 +164,8 @@ if __name__ == "__main__":
 		for t in threads: t.join()
 	except KeyboardInterrupt:
 		print("\nExited.")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
