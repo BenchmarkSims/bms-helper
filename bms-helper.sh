@@ -96,6 +96,7 @@ set_bms_mode() {
         internal)
             bms_mode="internal"
             bms_dirname="falcon-bms-internal"
+            bms_desktop_basename="Falcon BMS Internal.desktop"
             bms_default_install_path="$HOME/Games/$bms_dirname"
             conf_subdir="falcon-bms-internal"
             bms_base_dir="Falcon BMS 4.38 (Internal)"
@@ -105,6 +106,7 @@ set_bms_mode() {
         *)
             bms_mode="public"
             bms_dirname="falcon-bms"
+            bms_desktop_basename="Falcon BMS.desktop"
             bms_default_install_path="$HOME/Games/$bms_dirname"
             conf_subdir="falcon-bms"
             bms_base_dir="Falcon BMS 4.38"
@@ -124,15 +126,15 @@ refresh_desktop_execs() {
     getdirs || return 1
 
     # Paths to the desktop files (same as create_desktop_files)
-    localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
-    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+    localshare_desktop_file="${data_dir}/applications/$bms_desktop_basename"
+    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/$bms_desktop_basename"
 
     # Ensure install_dir is set (fallback to wine_prefix)
     install_dir="${install_dir:-$wine_prefix}"
 
     # Ensure launch script exists and is up to date
     create_or_update_launch_script || true
-    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
+    prefix_desktop_file="$install_dir/$bms_desktop_basename"
 
     # Prefer a persisted current runner in the install dir
     proton_candidate=""
@@ -1011,6 +1013,7 @@ getdirs() {
 get_current_runner() {
     current_runner_path=""
     current_runner_basename=""
+    launcher_winepath=""
 
     # Ensure wine_prefix and install_dir are available
     getdirs || return 1
@@ -1022,6 +1025,13 @@ get_current_runner() {
         if [ -n "$persisted_runner" ] && [ -d "$persisted_runner" ]; then
             current_runner_path="$persisted_runner"
             current_runner_basename="$(basename "$persisted_runner")"
+            if [ -x "$persisted_runner/files/bin/wine" ]; then
+                launcher_winepath="$persisted_runner/files/bin"
+            elif [ -x "$persisted_runner/bin/wine" ]; then
+                launcher_winepath="$persisted_runner/bin"
+            elif [ -x "$persisted_runner/wine" ]; then
+                launcher_winepath="$persisted_runner"
+            fi
             return 0
         fi
     fi
@@ -1045,11 +1055,77 @@ get_current_runner() {
             fi
             launcher_path="$(echo "$launcher_path" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
             if [ -n "$launcher_path" ]; then
-                current_runner_path="$launcher_path"
-                current_runner_basename="$(basename "$launcher_path")"
+                if [ -x "$launcher_path/wine" ]; then
+                    launcher_winepath="$launcher_path"
+                    current_runner_path="$(dirname "$launcher_path")"
+                elif [ -x "$launcher_path/files/bin/wine" ]; then
+                    launcher_winepath="$launcher_path/files/bin"
+                    current_runner_path="$launcher_path"
+                elif [ -x "$launcher_path/bin/wine" ]; then
+                    launcher_winepath="$launcher_path/bin"
+                    current_runner_path="$launcher_path"
+                else
+                    current_runner_path="$launcher_path"
+                fi
+                current_runner_basename="$(basename "$current_runner_path")"
             fi
         fi
     fi
+
+    if [ -z "$launcher_winepath" ] && [ -n "$current_runner_path" ]; then
+        if [ -x "$current_runner_path/files/bin/wine" ]; then
+            launcher_winepath="$current_runner_path/files/bin"
+        elif [ -x "$current_runner_path/bin/wine" ]; then
+            launcher_winepath="$current_runner_path/bin"
+        elif [ -x "$current_runner_path/wine" ]; then
+            launcher_winepath="$current_runner_path"
+        fi
+    fi
+    return 0
+}
+
+# MARK: sync_mfd_joystick_script()
+# Refresh an already-deployed companion helper next to the generated launcher.
+sync_mfd_joystick_script() {
+    install_dir="${install_dir:-$wine_prefix}"
+    sync_mfd_joystick_status="skipped"
+    sync_mfd_joystick_path=""
+
+    if [ -z "$install_dir" ] || [ ! -d "$install_dir" ]; then
+        return 0
+    fi
+
+    bundled_mfd_script="$SCRIPT_DIR/tools/mfd-joystick.py"
+    installed_mfd_script="$install_dir/mfd-joystick.py"
+    sync_mfd_joystick_path="$installed_mfd_script"
+
+    if [ ! -f "$bundled_mfd_script" ]; then
+        sync_mfd_joystick_status="missing-bundled"
+        return 0
+    fi
+
+    if [ ! -f "$installed_mfd_script" ]; then
+        sync_mfd_joystick_status="missing-installed"
+        return 0
+    fi
+
+    bundled_mfd_version="$(sed -n 's/^MFD_JOYSTICK_VERSION = "\([^"]*\)"$/\1/p' "$bundled_mfd_script" | head -n1)"
+    installed_mfd_version="$(sed -n 's/^MFD_JOYSTICK_VERSION = "\([^"]*\)"$/\1/p' "$installed_mfd_script" | head -n1)"
+
+    if cmp -s "$bundled_mfd_script" "$installed_mfd_script"; then
+        sync_mfd_joystick_status="current"
+        debug_print continue "MFD helper beside launcher is already current${bundled_mfd_version:+ (v$bundled_mfd_version)}."
+        return 0
+    fi
+
+    if cp "$bundled_mfd_script" "$installed_mfd_script"; then
+        sync_mfd_joystick_status="updated"
+        chmod +x "$installed_mfd_script" 2>/dev/null || true
+        debug_print continue "Updated adjacent MFD helper at $installed_mfd_script${bundled_mfd_version:+ to v$bundled_mfd_version}${installed_mfd_version:+ from v$installed_mfd_version}."
+    else
+        sync_mfd_joystick_status="failed"
+    fi
+
     return 0
 }
 
@@ -1115,7 +1191,7 @@ create_or_update_launch_script() {
 
 # Falcon BMS launcher generated by bms-helper.sh
 # Inspired by community launch-script patterns.
-# version: 1.8
+# version: 1.11
 
 ############################################################################
 # Environment
@@ -1143,9 +1219,51 @@ export WINEDLLOVERRIDES="winemenubuilder.exe=d;mscoree=n,b"
 export WINEDEBUG="\${WINEDEBUG:--all}"
 unset SDL_VIDEODRIVER
 
+# Launcher UI compatibility toggles (safe defaults for .NET/WPF launchers under Proton)
+# Set to 0 to disable each behavior.
+export BMS_LAUNCHER_UI_FIXES="\${BMS_LAUNCHER_UI_FIXES:-1}"
+export BMS_LAUNCHER_INSTALL_FONTS="\${BMS_LAUNCHER_INSTALL_FONTS:-1}"
+export BMS_LAUNCHER_FORCE_WINED3D="\${BMS_LAUNCHER_FORCE_WINED3D:-1}"
+
+# Launch/perf toggles (safe defaults for modern Proton GE + Linux kernels)
+# - GameMode defaults on if installed (CPU governor/scheduler hints)
+# - MangoHud defaults off
+# - Proton log defaults off to avoid extra disk I/O each launch
+# - fsync/esync default on; set to 0 only for troubleshooting
+export BMS_USE_GAMEMODE="\${BMS_USE_GAMEMODE:-1}"
+export BMS_USE_MANGOHUD="\${BMS_USE_MANGOHUD:-0}"
+export BMS_PROTON_LOG="\${BMS_PROTON_LOG:-0}"
+export BMS_USE_FSYNC="\${BMS_USE_FSYNC:-1}"
+export BMS_USE_ESYNC="\${BMS_USE_ESYNC:-1}"
+
+if [ "\$BMS_USE_FSYNC" != "1" ]; then
+    export PROTON_NO_FSYNC=1
+    export WINEFSYNC=0
+fi
+if [ "\$BMS_USE_ESYNC" != "1" ]; then
+    export PROTON_NO_ESYNC=1
+    export WINEESYNC=0
+fi
+
 # Managed runner paths (updated by bms-helper)
 export proton_path="$proton_path"
 export wine_path="$wine_path"
+
+# Optional helper-side MFD companion script locations.
+helper_script_dir="$SCRIPT_DIR"
+python3_bin="\$(command -v python3 2>/dev/null || true)"
+mfd_joystick_script="\${BMS_MFD_JOYSTICK_SCRIPT:-}"
+if [ -z "\$mfd_joystick_script" ]; then
+    if [ -f "\$helper_script_dir/mfd-joystick.py" ]; then
+        mfd_joystick_script="\$helper_script_dir/mfd-joystick.py"
+    elif [ -f "\$helper_script_dir/tools/mfd-joystick.py" ]; then
+        mfd_joystick_script="\$helper_script_dir/tools/mfd-joystick.py"
+    fi
+fi
+if [ -n "\$mfd_joystick_script" ] && [ -z "\$python3_bin" ]; then
+    echo "WARNING: mfd-joystick.py detected but python3 was not found. Disabling MFD helper integration." >> "\$launch_log"
+    mfd_joystick_script=""
+fi
 
 # If OS wine fallback is explicitly requested, clear custom runner paths
 if [ "\$1" = "--wine" ] || [ "\$1" = "wine" ]; then
@@ -1186,12 +1304,95 @@ run_wine() {
     return 1
 }
 
+run_with_launch_wrappers() {
+    # Apply optional wrappers only for the actual game/launcher process.
+    if [ "\$BMS_USE_GAMEMODE" = "1" ] && command -v gamemoderun >/dev/null 2>&1; then
+        if [ "\$BMS_USE_MANGOHUD" = "1" ] && command -v mangohud >/dev/null 2>&1; then
+            gamemoderun mangohud "\$@"
+        else
+            gamemoderun "\$@"
+        fi
+    elif [ "\$BMS_USE_MANGOHUD" = "1" ] && command -v mangohud >/dev/null 2>&1; then
+        mangohud "\$@"
+    else
+        "\$@"
+    fi
+}
+
+run_prefix_tricks_quiet() {
+    local _pt_bin=""
+    local _wt_bin=""
+    local _appid=""
+
+    _pt_bin="\$(command -v protontricks 2>/dev/null || true)"
+    _wt_bin="\$(command -v winetricks 2>/dev/null || true)"
+    _appid="\${BMS_PROTONTRICKS_APPID:-\${STEAM_APPID:-}}"
+
+    # protontricks is Steam/APPID-oriented. Use it only when an app id is known.
+    if [ -n "\$_appid" ] && [ -n "\$_pt_bin" ]; then
+        WINEPREFIX="\$WINEPREFIX" WINE="\$wine_path/wine" WINESERVER="\$wine_path/wineserver" "\$_pt_bin" "\$_appid" "\$@"
+        return \$?
+    fi
+
+    if [ -z "\$_wt_bin" ]; then
+        return 1
+    fi
+
+    # For custom non-Steam Proton prefixes, winetricks is the correct interface.
+    if [ -n "\$wine_path" ] && [ -d "\$wine_path" ]; then
+        PATH="\$wine_path:\$PATH" WINEPREFIX="\$WINEPREFIX" "\$_wt_bin" -q "\$@"
+    else
+        WINEPREFIX="\$WINEPREFIX" "\$_wt_bin" -q "\$@"
+    fi
+}
+
 run_wineserver_kill() {
     if [ -n "\$wine_path" ] && [ -x "\$wine_path/wineserver" ]; then
         "\$wine_path/wineserver" -k >/dev/null 2>&1 || true
     elif command -v wineserver >/dev/null 2>&1; then
         wineserver -k >/dev/null 2>&1 || true
     fi
+}
+
+start_mfd_joystick_if_present() {
+    if [ -z "\$mfd_joystick_script" ] || [ ! -f "\$mfd_joystick_script" ]; then
+        return 0
+    fi
+
+    if pgrep -f "\$mfd_joystick_script" >/dev/null 2>&1; then
+        echo "mfd_joystick=already_running script=\$mfd_joystick_script" >> "\$launch_log"
+        return 0
+    fi
+
+    if [ -z "\$python3_bin" ]; then
+        echo "WARNING: python3 is unavailable. Skipping MFD helper launch for script=\$mfd_joystick_script" >> "\$launch_log"
+        return 0
+    fi
+
+    nohup "\$python3_bin" "\$mfd_joystick_script" >> "\$launch_log" 2>&1 &
+    echo "mfd_joystick=started script=\$mfd_joystick_script python3=\$python3_bin" >> "\$launch_log"
+}
+
+monitor_mfd_joystick_lifecycle() {
+    if [ -z "\$mfd_joystick_script" ] || [ ! -f "\$mfd_joystick_script" ]; then
+        return 0
+    fi
+
+    (
+        while true; do
+            # Poll every 5 seconds for either the game or alternative launcher process.
+            sleep 5
+
+            if pgrep -fi 'Falcon BMS\.exe|FalconBMS_Alternative_Launcher\.exe' >/dev/null 2>&1; then
+                continue
+            fi
+
+            # Neither Falcon process is running anymore, stop MFD helper instances.
+            pkill -f "\$mfd_joystick_script" >/dev/null 2>&1 || true
+            echo "mfd_joystick=stopped reason=no_falcon_processes script=\$mfd_joystick_script" >> "\$launch_log"
+            break
+        done
+    ) >/dev/null 2>&1 &
 }
 
 sync_registry_view() {
@@ -1394,6 +1595,32 @@ check_dotnet48() {
     return 0
 }
 
+ensure_launcher_ui_fixes() {
+    if [ "\$BMS_LAUNCHER_UI_FIXES" != "1" ]; then
+        return 0
+    fi
+
+    # Prevent WPF hardware acceleration issues (black windows/artifacts under Proton + DXVK).
+    run_wine reg add 'HKCU\\Software\\Microsoft\\Avalon.Graphics' /v DisableHWAcceleration /t REG_DWORD /d 1 /f >/dev/null 2>&1 || true
+
+    # Keep launcher text metrics predictable to reduce overlap/clipping on some setups.
+    run_wine reg add 'HKCU\\Control Panel\\Desktop' /v LogPixels /t REG_DWORD /d 96 /f >/dev/null 2>&1 || true
+
+    # Install common Windows fonts/runtime bits once through protontricks when an
+    # APPID is available, otherwise fall back to winetricks for this custom prefix.
+    if [ "\$BMS_LAUNCHER_INSTALL_FONTS" = "1" ]; then
+        fontfix_marker="\$WINEPREFIX/.bms-launcher-fontfixes-v1"
+        if [ ! -f "\$fontfix_marker" ]; then
+            if run_prefix_tricks_quiet corefonts tahoma gdiplus >> "\$launch_log" 2>&1; then
+                touch "\$fontfix_marker" 2>/dev/null || true
+            else
+                echo "WARNING: protontricks/winetricks was not found or failed; skipping automatic font/runtime fixes." >> "\$launch_log"
+                echo "         Install winetricks for custom prefixes, or set BMS_PROTONTRICKS_APPID for protontricks-backed installs, then run once with BMS_LAUNCHER_INSTALL_FONTS=1 to retry." >> "\$launch_log"
+            fi
+        fi
+    fi
+}
+
 ############################################################################
 # Subcommands (maintenance)
 ############################################################################
@@ -1438,6 +1665,13 @@ ensure_wine_vr_key
 
 # Warn in the launch log if .NET 4.8 is missing/outdated for launcher apps that require it
 check_dotnet48 || true
+
+# Apply launcher-focused rendering/font fixes before process start
+ensure_launcher_ui_fixes
+
+# Start optional MFD companion helper before launching BMS.
+start_mfd_joystick_if_present
+monitor_mfd_joystick_lifecycle
 
 # Ensure relative paths resolve from launcher directory
 launcher_dir="\$(dirname "\$launcher_exe")"
@@ -1523,7 +1757,7 @@ if [ "\$use_proton_launcher" = "1" ] && [ "\$proton_available" = "1" ]; then
             _xr_json="\$XR_RUNTIME_JSON"
         fi
         echo "umu_env XR_RUNTIME_JSON=\$_xr_json PRESSURE_VESSEL_FILESYSTEMS_RW=\$_pv_fs_rw" >> "\$launch_log"
-        env GAMEID=0 \
+        run_with_launch_wrappers env GAMEID=0 \
             PROTONPATH="\$proton_path" \
             STEAM_COMPAT_DATA_PATH="\$WINEPREFIX" \
             WINEPREFIX="\$WINEPREFIX" \
@@ -1533,11 +1767,12 @@ if [ "\$use_proton_launcher" = "1" ] && [ "\$proton_available" = "1" ]; then
         proton_exit=\$?
     else
         echo "runner_selected=proton proton_bin=\$proton_path/proton compat_client_path=\$compat_client_path" >> "\$launch_log"
-        env WINEPREFIX="\$WINEPREFIX" \
+        run_with_launch_wrappers env WINEPREFIX="\$WINEPREFIX" \
             STEAM_COMPAT_DATA_PATH="\$WINEPREFIX" \
             STEAM_COMPAT_CLIENT_INSTALL_PATH="\$compat_client_path" \
             UMU_ID=0 \
-            PROTON_LOG=1 \
+            PROTON_LOG="\$BMS_PROTON_LOG" \
+            PROTON_USE_WINED3D="\$BMS_LAUNCHER_FORCE_WINED3D" \
             "\$proton_path/proton" run "\$(basename "\$launcher_exe")" \${BMS_EXTRA_ARGS} >> "\$launch_log" 2>&1
         proton_exit=\$?
     fi
@@ -1566,13 +1801,14 @@ elif command -v wine >/dev/null 2>&1; then
 fi
 echo "runner_selected=wine wine_bin=\$wine_bin" >> "\$launch_log"
 
-run_wine "\$(basename "\$launcher_exe")" \${BMS_EXTRA_ARGS} >> "\$launch_log" 2>&1
+run_with_launch_wrappers run_wine "\$(basename "\$launcher_exe")" \${BMS_EXTRA_ARGS} >> "\$launch_log" 2>&1
 wine_exit=\$?
 echo "wine_exit_code=\$wine_exit" >> "\$launch_log"
 exit \$wine_exit
 EOF
 
     chmod +x "$launch_script_path" 2>/dev/null || true
+    sync_mfd_joystick_script || true
     return 0
 }
 
@@ -2057,7 +2293,7 @@ download_manage() {
         unset post_download_required
 
         # Set variables for the current wine runner configured in the launch script
-        if [ "$download_type" = "runner" ]; then
+        if [ "$download_type" = "runner" ] || [ "$download_type" = "proton" ]; then
             get_current_runner
         fi
 
@@ -2069,6 +2305,14 @@ download_manage() {
             # Set the corresponding functions to be called for each of the options
             menu_actions+=("download_select_install $i")
         done
+
+        if [ "$download_type" = "proton" ]; then
+            collect_external_proton_runners
+            if [ "${#external_proton_paths[@]}" -gt 0 ]; then
+                menu_options+=("Select an existing Proton runner (Steam / OS)")
+                menu_actions+=("select_existing_proton_runner_menu")
+            fi
+        fi
 
         # Complete the menu by adding options to uninstall an item
         # or go back to the previous menu
@@ -2139,6 +2383,251 @@ runner_manage() {
     download_manage "runner"
 }
 
+# MARK: collect_external_proton_runners()
+# Detect Proton installs provided by Steam or the OS so they can be selected
+# without being managed or deleted by this helper.
+collect_external_proton_runners() {
+    unset external_proton_paths
+    unset external_proton_names
+    unset external_proton_labels
+
+    declare -A _seen_external_proton_paths
+    unset _steam_library_roots
+
+    _steam_library_file_candidates=(
+        "$HOME/.steam/root/steamapps/libraryfolders.vdf"
+        "$HOME/.steam/steam/steamapps/libraryfolders.vdf"
+        "$HOME/.steam/debian-installation/steamapps/libraryfolders.vdf"
+        "${XDG_DATA_HOME:-$HOME/.local/share}/Steam/steamapps/libraryfolders.vdf"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/libraryfolders.vdf"
+        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/libraryfolders.vdf"
+        "$HOME/snap/steam/common/.local/share/Steam/steamapps/libraryfolders.vdf"
+        "$HOME/snap/steam/common/Steam/steamapps/libraryfolders.vdf"
+    )
+
+    for _library_file in "${_steam_library_file_candidates[@]}"; do
+        if [ ! -f "$_library_file" ]; then
+            continue
+        fi
+
+        while IFS='' read -r _library_root; do
+            if [ -z "$_library_root" ] || [ ! -d "$_library_root" ]; then
+                continue
+            fi
+            _library_root="$(readlink -f "$_library_root" 2>/dev/null || printf '%s' "$_library_root")"
+            if [ -z "${_seen_external_proton_paths[$_library_root]+x}" ]; then
+                _steam_library_roots+=("$_library_root")
+                _seen_external_proton_paths[$_library_root]=1
+            fi
+        done < <(
+            grep -E '"path"[[:space:]]+"[^"]+"' "$_library_file" |
+                sed -E 's/.*"path"[[:space:]]+"([^"]+)".*/\1/'
+        )
+    done
+
+    unset _seen_external_proton_paths
+    declare -A _seen_external_proton_paths
+
+    _collect_external_proton_candidate() {
+        _candidate_path="$1"
+        _candidate_source="$2"
+
+        if [ -z "$_candidate_path" ] || [ ! -d "$_candidate_path" ] || [ ! -x "$_candidate_path/proton" ]; then
+            return 0
+        fi
+
+        _candidate_realpath="$(readlink -f "$_candidate_path" 2>/dev/null || printf '%s' "$_candidate_path")"
+        if [ -n "${_seen_external_proton_paths[$_candidate_realpath]+x}" ]; then
+            return 0
+        fi
+
+        _candidate_name="$(basename "$_candidate_realpath")"
+        case "$_candidate_name" in
+            *[Pp]roton*|GE-Proton*|UMU-Proton*)
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+
+        _seen_external_proton_paths[$_candidate_realpath]=1
+        external_proton_paths+=("$_candidate_realpath")
+        external_proton_names+=("$_candidate_name")
+        external_proton_labels+=("$_candidate_name ($_candidate_source)")
+    }
+
+    _steam_scan_roots=(
+        "$HOME/.steam/root/compatibilitytools.d"
+        "$HOME/.steam/root/steamapps/common"
+        "$HOME/.steam/steam/compatibilitytools.d"
+        "$HOME/.steam/steam/steamapps/common"
+        "$HOME/.steam/debian-installation/compatibilitytools.d"
+        "$HOME/.steam/debian-installation/steamapps/common"
+        "${XDG_DATA_HOME:-$HOME/.local/share}/Steam/compatibilitytools.d"
+        "${XDG_DATA_HOME:-$HOME/.local/share}/Steam/steamapps/common"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common"
+        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam/compatibilitytools.d"
+        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/common"
+        "$HOME/snap/steam/common/.local/share/Steam/compatibilitytools.d"
+        "$HOME/snap/steam/common/.local/share/Steam/steamapps/common"
+        "$HOME/snap/steam/common/Steam/compatibilitytools.d"
+        "$HOME/snap/steam/common/Steam/steamapps/common"
+    )
+    for _steam_library_root in "${_steam_library_roots[@]}"; do
+        _steam_scan_roots+=("$_steam_library_root/compatibilitytools.d")
+        _steam_scan_roots+=("$_steam_library_root/steamapps/common")
+    done
+
+    for _scan_root in "${_steam_scan_roots[@]}"; do
+        if [ ! -d "$_scan_root" ]; then
+            continue
+        fi
+        for _candidate in "$_scan_root"/*; do
+            [ -d "$_candidate" ] || continue
+            _collect_external_proton_candidate "$_candidate" "Steam"
+        done
+    done
+
+    _heroic_scan_roots=(
+        "$HOME/.config/heroic/tools/proton"
+        "$HOME/.config/Heroic/tools/proton"
+        "$HOME/.var/app/com.heroicgameslauncher.hgl/config/heroic/tools/proton"
+        "$HOME/.var/app/com.heroicgameslauncher.hgl/config/Heroic/tools/proton"
+        "$HOME/.var/app/com.heroicgameslauncher.hgl/data/heroic/tools/proton"
+        "$HOME/.var/app/com.heroicgameslauncher.hgl/data/Heroic/tools/proton"
+        "$HOME/snap/heroic/common/.config/heroic/tools/proton"
+        "$HOME/snap/heroic/common/.config/Heroic/tools/proton"
+    )
+
+    for _scan_root in "${_heroic_scan_roots[@]}"; do
+        if [ ! -d "$_scan_root" ]; then
+            continue
+        fi
+        for _candidate in "$_scan_root"/*; do
+            [ -d "$_candidate" ] || continue
+            _collect_external_proton_candidate "$_candidate" "Heroic"
+        done
+    done
+
+    _os_scan_roots=(
+        "/usr/share/steam/compatibilitytools.d"
+        "/usr/local/share/steam/compatibilitytools.d"
+        "/usr/share/Steam/compatibilitytools.d"
+        "/usr/lib/steam/compatibilitytools.d"
+        "/usr/lib64/steam/compatibilitytools.d"
+        "/usr/share/games/steam/compatibilitytools.d"
+        "/usr/local/share/games/steam/compatibilitytools.d"
+        "/usr/lib/games/steam/compatibilitytools.d"
+        "/usr/lib64/games/steam/compatibilitytools.d"
+        "/usr/libexec/steam/compatibilitytools.d"
+        "/usr/libexec/games/steam/compatibilitytools.d"
+        "/usr/share/steam/steamapps/common"
+        "/usr/lib/steam/steamapps/common"
+        "/usr/lib64/steam/steamapps/common"
+        "/usr/share/games/steam/steamapps/common"
+        "/usr/lib/games/steam/steamapps/common"
+        "/usr/lib64/games/steam/steamapps/common"
+        "/usr/libexec/steam/steamapps/common"
+        "/usr/libexec/games/steam/steamapps/common"
+        "/var/lib/flatpak/app/com.valvesoftware.Steam/current/active/files/extra/compatibilitytools.d"
+        "/var/lib/flatpak/app/com.valvesoftware.Steam/current/active/files/extra/steamapps/common"
+        "/var/lib/snapd/hostfs/usr/share/steam/compatibilitytools.d"
+        "/var/lib/snapd/hostfs/usr/lib/steam/compatibilitytools.d"
+    )
+
+    for _scan_root in "${_os_scan_roots[@]}"; do
+        if [ ! -d "$_scan_root" ]; then
+            continue
+        fi
+        for _candidate in "$_scan_root"/*; do
+            [ -d "$_candidate" ] || continue
+            _collect_external_proton_candidate "$_candidate" "OS"
+        done
+    done
+
+    unset -f _collect_external_proton_candidate
+}
+
+# MARK: select_existing_proton_runner()
+# Select a Steam/OS-provided Proton runner without downloading or deleting it.
+select_existing_proton_runner() {
+    if [ -z "$1" ]; then
+        debug_print exit "Script error: The select_existing_proton_runner function expects an index argument. Aborting."
+    elif [ -z "${external_proton_paths[$1]}" ]; then
+        debug_print exit "Script error: Invalid external Proton runner index in select_existing_proton_runner(). Aborting."
+    fi
+
+    selected_external_proton_path="${external_proton_paths[$1]}"
+    selected_external_proton_label="${external_proton_labels[$1]}"
+
+    if [ ! -x "$selected_external_proton_path/proton" ]; then
+        message warning "The selected Proton runner is no longer available:\n\n$selected_external_proton_path"
+        return 1
+    fi
+
+    install_dir="${install_dir:-$wine_prefix}"
+    mkdir -p "$install_dir"
+    echo "$selected_external_proton_path" > "$install_dir/current_runner"
+    chmod 644 "$install_dir/current_runner" 2>/dev/null || true
+
+    if ! create_or_update_launch_script; then
+        message error "Unable to update the launch script for the selected Proton runner."
+        return 1
+    fi
+
+    if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
+        create_desktop_files
+        refresh_desktop_execs
+    fi
+
+    message info "Launch environment updated to use:\n\n$selected_external_proton_label\n$selected_external_proton_path"
+}
+
+# MARK: select_existing_proton_runner_menu()
+# Present Steam/OS-provided Proton runners in a dedicated submenu.
+select_existing_proton_runner_menu() {
+    collect_external_proton_runners
+    get_current_runner
+
+    if [ "${#external_proton_paths[@]}" -eq 0 ]; then
+        message info "No Steam or OS-provided Proton runners were detected."
+        return 0
+    fi
+
+    menu_text_zenity="Select an existing Proton runner to use:"
+    menu_text_terminal="Select an existing Proton runner to use:"
+    menu_text_height="320"
+    menu_type="radiolist"
+    cancel_label="Go Back"
+    goback="Return to the Proton management menu"
+    unset menu_options
+    unset menu_actions
+    unset menu_default_choice
+
+    for (( i=0; i<${#external_proton_paths[@]}; i++ )); do
+        if [ "$current_runner_path" = "${external_proton_paths[i]}" ]; then
+            menu_option_text="${external_proton_labels[i]} (in use)"
+            menu_default_choice="${external_proton_labels[i]}"
+        else
+            menu_option_text="${external_proton_labels[i]}"
+        fi
+
+        menu_options+=("$menu_option_text")
+        menu_actions+=("select_existing_proton_runner $i")
+    done
+
+    menu_options+=("$goback")
+    menu_actions+=(":")
+
+    menu_height="$(($menu_option_height * ${#menu_options[@]} + $menu_text_height + $menu_text_height_zenity4))"
+    if [ "$menu_height" -gt "$menu_height_max" ]; then
+        menu_height="$menu_height_max"
+    fi
+
+    menu
+}
+
 # MARK: proton_manage()
 # Configure the download_manage function specifically for Proton GE runners
 proton_manage() {
@@ -2150,6 +2639,12 @@ proton_manage() {
 
     # Get directories so we know where the wine prefix is
     getdirs
+
+    set_latest_default_runner
+    if [ "$?" -eq 1 ]; then
+        message error "Could not fetch the latest default Proton runner. The Github API may be down or rate limited."
+        return 1
+    fi
 
     # Set the download directory for proton runners
     download_dir="$wine_prefix/runners"
@@ -2363,8 +2858,13 @@ download_select_install() {
     fi
 
     # Configure the menu
-    menu_text_zenity="Select the $download_type you want to install:"
-    menu_text_terminal="Select the $download_type you want to install:"
+    if [ "$download_type" = "proton" ]; then
+        menu_text_zenity="Select the Proton runner you want to use:"
+        menu_text_terminal="Select the Proton runner you want to use:"
+    else
+        menu_text_zenity="Select the $download_type you want to install:"
+        menu_text_terminal="Select the $download_type you want to install:"
+    fi
     menu_text_height="320"
     menu_type="radiolist"
     goback="Return to the $download_type management menu"
@@ -2376,40 +2876,8 @@ download_select_install() {
     # To add new file extensions, handle them here and in
     # the download_install function
 
-    # If listing Proton runners, attempt to detect the currently
-    # configured Proton runner from the launch script so we can mark
-    # it as "(in use)" in the menu.
     if [ "$download_type" = "proton" ]; then
-        # Ensure install_dir is set so we can read persisted runner info
-        install_dir="${install_dir:-$wine_prefix}"
-        current_runner_basename=""
-        launch_script=""
-        if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
-            if [ -n "$wine_launch_script_name" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
-                launch_script="$wine_prefix/$wine_launch_script_name"
-            else
-                for f in "$wine_prefix"/*; do
-                    if [ -f "$f" ] && grep -q -e '^export proton_path=' -e '^proton_path=' "$f" 2>/dev/null; then
-                        launch_script="$f"
-                        break
-                    fi
-                done
-            fi
-        fi
-        if [ -n "$launch_script" ]; then
-            launcher_path="$(grep -e '^export proton_path=' -e '^proton_path=' "$launch_script" | awk -F '=' '{print $2}' | tr -d '"')"
-            launcher_path="$(echo "$launcher_path" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
-            if [ -n "$launcher_path" ]; then
-                current_runner_basename="$(basename "$launcher_path")"
-            fi
-        fi
-        # If a persisted current_runner exists in install dir, prefer it
-        if [ -f "$install_dir/current_runner" ]; then
-            persisted_runner="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
-            if [ -n "$persisted_runner" ]; then
-                current_runner_basename="$(basename "$persisted_runner")"
-            fi
-        fi
+        get_current_runner
     fi
 
     for (( i=0, num_download_items=0; i<${#download_versions[@]} && num_download_items<max_download_items; i++ )); do
@@ -2442,7 +2910,7 @@ download_select_install() {
         # Build the menu item
         unset menu_option_text
         if [ "$download_type" = "proton" ]; then
-            if [ -d "${download_dir}/${download_basename}" ] && [ "$current_runner_basename" = "$download_basename" ]; then
+            if [ "$current_runner_path" = "${download_dir}/${download_basename}" ]; then
                 menu_option_text="$download_basename (in use)"
             elif [ -d "${download_dir}/${download_basename}" ]; then
                 menu_option_text="$download_basename (downloaded)"
@@ -2718,7 +3186,7 @@ download_select_delete() {
         # Build the menu item
         unset menu_option_text
         # Special handling for runners currently in use
-        if [ "$download_type" = "runner" ] && [ "$current_runner_basename" = "${installed_item_names[i]}" ]; then
+        if { [ "$download_type" = "runner" ] || [ "$download_type" = "proton" ]; } && [ "$current_runner_path" = "${installed_items[i]}" ]; then
             menu_option_text="${installed_item_names[i]}    [in-use]"
         else
             # Everything else
@@ -2799,7 +3267,7 @@ download_delete() {
             debug_print continue "Deleted ${installed_items[${item_to_delete[i]}]}"
 
             # If we just deleted the currently used runner, we need to trigger post-delete to update the launch script
-            if [ "$download_type" = "runner" ] && [ "${installed_items[${item_to_delete[i]}]}" = "$current_runner_path" ]; then
+            if { [ "$download_type" = "runner" ] || [ "$download_type" = "proton" ]; } && [ "${installed_items[${item_to_delete[i]}]}" = "$current_runner_path" ]; then
                 post_delete_required="true"
             fi
 
@@ -2919,6 +3387,10 @@ post_download() {
                 mkdir -p "$install_dir"
                 echo "${post_delete_restore_value}" > "$install_dir/current_runner"
                 chmod 644 "$install_dir/current_runner" 2>/dev/null || true
+            fi
+            if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
+                create_desktop_files
+                refresh_desktop_execs
             fi
         else
             debug_print exit "Script error: Unknown post_download_required value in post_download function. Aborting."
@@ -3081,7 +3553,20 @@ update_launch_script() {
     create_desktop_files needed
     refresh_desktop_execs
 
-    message info "Your game launch script has been updated/repaired.\n\nPath:\n$wine_prefix/$wine_launch_script_name"
+    helper_update_message=""
+    case "$sync_mfd_joystick_status" in
+        updated)
+            helper_update_message="\n\nThe adjacent MFD helper script was updated as well:\n$sync_mfd_joystick_path"
+            ;;
+        current)
+            helper_update_message="\n\nThe adjacent MFD helper script is already current:\n$sync_mfd_joystick_path"
+            ;;
+        failed)
+            helper_update_message="\n\nThe adjacent MFD helper script was detected but could not be updated:\n$sync_mfd_joystick_path"
+            ;;
+    esac
+
+    message info "Your game launch script has been updated/repaired.\n\nPath:\n$wine_prefix/$wine_launch_script_name$helper_update_message"
 }
 
 # MARK: edit_launch_script()
@@ -3412,9 +3897,12 @@ uninstall_bms() {
     fi
 
     install_dir="$wine_prefix"
-    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
-    localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
-    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+    prefix_desktop_file="$install_dir/$bms_desktop_basename"
+    localshare_desktop_file="${data_dir}/applications/$bms_desktop_basename"
+    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/$bms_desktop_basename"
+    legacy_localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
+    legacy_home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+    legacy_prefix_desktop_file="$install_dir/Falcon BMS.desktop"
     icon_file="${data_dir}/icons/hicolor/256x256/apps/bms-launcher.png"
 
     if ! message question "This will permanently delete the Falcon BMS installation at:\n\n$install_dir\n\nand remove desktop shortcuts and icon. Continue?"; then
@@ -3433,6 +3921,8 @@ uninstall_bms() {
 
     # Remove desktop files and icon
     rm -f -- "$prefix_desktop_file" "$localshare_desktop_file" "$home_desktop_file"
+    # Also remove legacy shortcut names used before mode-specific desktop files.
+    rm -f -- "$legacy_prefix_desktop_file" "$legacy_localshare_desktop_file" "$legacy_home_desktop_file"
     rm -f -- "$icon_file"
 
     # Update desktop database
@@ -4008,12 +4498,12 @@ create_desktop_files() {
         debug_print exit "Script error: The string 'wine_prefix' was not set before calling the create_desktop_files function. Aborting."
     fi
 
-    # $HOME/Games/Falcon-BMS/Falcon BMS.desktop
-    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
-    # $HOME/.local/share/applications/Falcon BMS.desktop
-    localshare_desktop_file="${data_dir}/applications/Falcon BMS.desktop"
-    # $HOME/Desktop/Falcon BMS.desktop
-    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/Falcon BMS.desktop"
+    # $HOME/Games/Falcon-BMS/<desktop file>
+    prefix_desktop_file="$install_dir/$bms_desktop_basename"
+    # $HOME/.local/share/applications/<desktop file>
+    localshare_desktop_file="${data_dir}/applications/$bms_desktop_basename"
+    # $HOME/Desktop/<desktop file>
+    home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/$bms_desktop_basename"
 
     create_desktop_files="true"
     # If the "needed" argument is passed, determine if we need to create system desktop files
@@ -4036,8 +4526,8 @@ create_desktop_files() {
     # Ensure launch script exists and is up to date
     create_or_update_launch_script || true
 
-    # $HOME/Games/Falcon-BMS/Falcon BMS.desktop
-    prefix_desktop_file="$install_dir/Falcon BMS.desktop"
+    # $HOME/Games/Falcon-BMS/<desktop file>
+    prefix_desktop_file="$install_dir/$bms_desktop_basename"
 
     # Detect configured runner (prefer Proton) from persisted file or the launch script and prefer its proton binary
     runner_exec="wine"
