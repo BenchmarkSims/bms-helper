@@ -35,6 +35,9 @@ Configuration is saved in *$XDG_CONFIG_HOME/bms-helper/*
 - `Install PowerShell into Wine prefix`
   - Uses protontricks for the install workflow
 
+- `Install OpenTrack for Windows`
+  - Downloads the latest `*-win32-setup.exe` from the OpenTrack GitHub releases page and runs it silently with `/silent` inside the currently targeted Wine prefix
+
 - `Display Helper and Falcon BMS directories`
   - Show all the directories currently in use by both the Helper and Falcon BMS
 
@@ -68,6 +71,7 @@ These notes summarize the current launcher behavior reflected in the latest scri
 - `PROTON_LOG` is no longer forced on for every launch; it is now controlled through an environment toggle.
 - Proton fsync and esync can be disabled explicitly for troubleshooting without editing the launcher.
 - The launcher can auto-start the bundled `tools/mfd-joystick.py` helper when present and stop it again when Falcon BMS exits.
+- The launcher can also auto-start `opentrack.exe` when it is installed inside the Falcon BMS prefix under `drive_c/Program Files (x86)`, and it now does that only after Falcon's launcher or game process is already running.
 - The MFD helper can also be overridden with `BMS_MFD_JOYSTICK_SCRIPT` if you keep the script in a different path.
 - When the launcher is regenerated or repaired, the helper also refreshes an existing `mfd-joystick.py` copy already placed beside `bms-launcher.sh`.
 - Proton management now includes a dedicated menu entry for Proton installs detected from Steam and common OS locations.
@@ -85,6 +89,8 @@ The generated launcher exports a set of environment variables you can override b
 - `BMS_PROTON_LOG=1|0`: enable Proton logging only when you actually need it.
 - `BMS_USE_FSYNC=1|0`: disable fsync by exporting `PROTON_NO_FSYNC=1` and `WINEFSYNC=0` when set to `0`.
 - `BMS_USE_ESYNC=1|0`: disable esync by exporting `PROTON_NO_ESYNC=1` and `WINEESYNC=0` when set to `0`.
+- `BMS_AUTO_LAUNCH_OPENTRACK=1|0`: auto-start OpenTrack from the Windows install inside the prefix when found under `Program Files (x86)`.
+- `BMS_OPENTRACK_DELAY=<seconds>`: wait this many seconds after Falcon's launcher or game process is detected before starting OpenTrack. Defaults to `3`.
 - `BMS_MFD_JOYSTICK_SCRIPT=/path/to/mfd-joystick.py`: point the launcher at a custom MFD helper script.
 - `BMS_MFD_GRAB_PHYSICAL=1|0`: when the MFD helper runs, exclusively grab the physical MFD evdev devices so only the virtual replacements are visible to the game.
 - `BMS_PROTONTRICKS_APPID=<steam app id>`: let the launcher use `protontricks` for one-time font/runtime setup on Steam-backed installs.
