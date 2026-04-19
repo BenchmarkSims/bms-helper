@@ -69,6 +69,9 @@ These notes summarize the current launcher behavior reflected in the latest scri
 - Proton fsync and esync can be disabled explicitly for troubleshooting without editing the launcher.
 - The launcher can auto-start the bundled `tools/mfd-joystick.py` helper when present and stop it again when Falcon BMS exits.
 - The MFD helper can also be overridden with `BMS_MFD_JOYSTICK_SCRIPT` if you keep the script in a different path.
+- When the launcher is regenerated or repaired, the helper also refreshes an existing `mfd-joystick.py` copy already placed beside `bms-launcher.sh`.
+- Proton management now includes a dedicated menu entry for Proton installs detected from Steam and common OS locations.
+- Steam/OS-provided Proton installs can be selected for launch, but only helper-downloaded runners under the prefix are removable from the helper UI.
 
 **Launcher toggles**
 
@@ -83,6 +86,7 @@ The generated launcher exports a set of environment variables you can override b
 - `BMS_USE_FSYNC=1|0`: disable fsync by exporting `PROTON_NO_FSYNC=1` and `WINEFSYNC=0` when set to `0`.
 - `BMS_USE_ESYNC=1|0`: disable esync by exporting `PROTON_NO_ESYNC=1` and `WINEESYNC=0` when set to `0`.
 - `BMS_MFD_JOYSTICK_SCRIPT=/path/to/mfd-joystick.py`: point the launcher at a custom MFD helper script.
+- `BMS_MFD_GRAB_PHYSICAL=1|0`: when the MFD helper runs, exclusively grab the physical MFD evdev devices so only the virtual replacements are visible to the game.
 - `BMS_PROTONTRICKS_APPID=<steam app id>`: let the launcher use `protontricks` for one-time font/runtime setup on Steam-backed installs.
 
 The launcher still supports `--proton`, `--wine`, and `--auto` to select the runner mode at launch time.
@@ -93,6 +97,8 @@ The launcher still supports `--proton`, `--wine`, and `--auto` to select the run
 
 - It is started automatically if the file exists either next to the launcher or in `tools/`.
 - It requires `python3` and the Python `evdev` package.
+- It exposes an internal `MFD_JOYSTICK_VERSION` value and prints that version on startup for tracking deployed copies.
 - Place the script in the falcon-bms master folder (the one created by wine / proton) along side `bms-launcher.sh`
 - On most systems you will also need permissions for `uinput` and access to the source input devices.
+- By default it exclusively grabs the physical MFD evdev nodes while it is running, which hides the source devices from Wine/Proton and leaves the virtual devices as the ones the game sees. Set `BMS_MFD_GRAB_PHYSICAL=0` to disable that behavior.
 

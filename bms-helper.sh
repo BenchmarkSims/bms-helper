@@ -1084,6 +1084,51 @@ get_current_runner() {
     return 0
 }
 
+# MARK: sync_mfd_joystick_script()
+# Refresh an already-deployed companion helper next to the generated launcher.
+sync_mfd_joystick_script() {
+    install_dir="${install_dir:-$wine_prefix}"
+    sync_mfd_joystick_status="skipped"
+    sync_mfd_joystick_path=""
+
+    if [ -z "$install_dir" ] || [ ! -d "$install_dir" ]; then
+        return 0
+    fi
+
+    bundled_mfd_script="$SCRIPT_DIR/tools/mfd-joystick.py"
+    installed_mfd_script="$install_dir/mfd-joystick.py"
+    sync_mfd_joystick_path="$installed_mfd_script"
+
+    if [ ! -f "$bundled_mfd_script" ]; then
+        sync_mfd_joystick_status="missing-bundled"
+        return 0
+    fi
+
+    if [ ! -f "$installed_mfd_script" ]; then
+        sync_mfd_joystick_status="missing-installed"
+        return 0
+    fi
+
+    bundled_mfd_version="$(sed -n 's/^MFD_JOYSTICK_VERSION = "\([^"]*\)"$/\1/p' "$bundled_mfd_script" | head -n1)"
+    installed_mfd_version="$(sed -n 's/^MFD_JOYSTICK_VERSION = "\([^"]*\)"$/\1/p' "$installed_mfd_script" | head -n1)"
+
+    if cmp -s "$bundled_mfd_script" "$installed_mfd_script"; then
+        sync_mfd_joystick_status="current"
+        debug_print continue "MFD helper beside launcher is already current${bundled_mfd_version:+ (v$bundled_mfd_version)}."
+        return 0
+    fi
+
+    if cp "$bundled_mfd_script" "$installed_mfd_script"; then
+        sync_mfd_joystick_status="updated"
+        chmod +x "$installed_mfd_script" 2>/dev/null || true
+        debug_print continue "Updated adjacent MFD helper at $installed_mfd_script${bundled_mfd_version:+ to v$bundled_mfd_version}${installed_mfd_version:+ from v$installed_mfd_version}."
+    else
+        sync_mfd_joystick_status="failed"
+    fi
+
+    return 0
+}
+
 # MARK: create_or_update_launch_script()
 # Generate/update a per-prefix launch script.
 # The script encapsulates runner/proton invocation so desktop files can call it directly.
@@ -1763,6 +1808,7 @@ exit \$wine_exit
 EOF
 
     chmod +x "$launch_script_path" 2>/dev/null || true
+    sync_mfd_joystick_script || true
     return 0
 }
 
@@ -2260,6 +2306,14 @@ download_manage() {
             menu_actions+=("download_select_install $i")
         done
 
+        if [ "$download_type" = "proton" ]; then
+            collect_external_proton_runners
+            if [ "${#external_proton_paths[@]}" -gt 0 ]; then
+                menu_options+=("Select an existing Proton runner (Steam / OS)")
+                menu_actions+=("select_existing_proton_runner_menu")
+            fi
+        fi
+
         # Complete the menu by adding options to uninstall an item
         # or go back to the previous menu
         menu_options+=("$delete" "$back")
@@ -2327,6 +2381,251 @@ runner_manage() {
     # The argument passed to the function is used for special handling
     # and displayed in the menus and dialogs.
     download_manage "runner"
+}
+
+# MARK: collect_external_proton_runners()
+# Detect Proton installs provided by Steam or the OS so they can be selected
+# without being managed or deleted by this helper.
+collect_external_proton_runners() {
+    unset external_proton_paths
+    unset external_proton_names
+    unset external_proton_labels
+
+    declare -A _seen_external_proton_paths
+    unset _steam_library_roots
+
+    _steam_library_file_candidates=(
+        "$HOME/.steam/root/steamapps/libraryfolders.vdf"
+        "$HOME/.steam/steam/steamapps/libraryfolders.vdf"
+        "$HOME/.steam/debian-installation/steamapps/libraryfolders.vdf"
+        "${XDG_DATA_HOME:-$HOME/.local/share}/Steam/steamapps/libraryfolders.vdf"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/libraryfolders.vdf"
+        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/libraryfolders.vdf"
+        "$HOME/snap/steam/common/.local/share/Steam/steamapps/libraryfolders.vdf"
+        "$HOME/snap/steam/common/Steam/steamapps/libraryfolders.vdf"
+    )
+
+    for _library_file in "${_steam_library_file_candidates[@]}"; do
+        if [ ! -f "$_library_file" ]; then
+            continue
+        fi
+
+        while IFS='' read -r _library_root; do
+            if [ -z "$_library_root" ] || [ ! -d "$_library_root" ]; then
+                continue
+            fi
+            _library_root="$(readlink -f "$_library_root" 2>/dev/null || printf '%s' "$_library_root")"
+            if [ -z "${_seen_external_proton_paths[$_library_root]+x}" ]; then
+                _steam_library_roots+=("$_library_root")
+                _seen_external_proton_paths[$_library_root]=1
+            fi
+        done < <(
+            grep -E '"path"[[:space:]]+"[^"]+"' "$_library_file" |
+                sed -E 's/.*"path"[[:space:]]+"([^"]+)".*/\1/'
+        )
+    done
+
+    unset _seen_external_proton_paths
+    declare -A _seen_external_proton_paths
+
+    _collect_external_proton_candidate() {
+        _candidate_path="$1"
+        _candidate_source="$2"
+
+        if [ -z "$_candidate_path" ] || [ ! -d "$_candidate_path" ] || [ ! -x "$_candidate_path/proton" ]; then
+            return 0
+        fi
+
+        _candidate_realpath="$(readlink -f "$_candidate_path" 2>/dev/null || printf '%s' "$_candidate_path")"
+        if [ -n "${_seen_external_proton_paths[$_candidate_realpath]+x}" ]; then
+            return 0
+        fi
+
+        _candidate_name="$(basename "$_candidate_realpath")"
+        case "$_candidate_name" in
+            *[Pp]roton*|GE-Proton*|UMU-Proton*)
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+
+        _seen_external_proton_paths[$_candidate_realpath]=1
+        external_proton_paths+=("$_candidate_realpath")
+        external_proton_names+=("$_candidate_name")
+        external_proton_labels+=("$_candidate_name ($_candidate_source)")
+    }
+
+    _steam_scan_roots=(
+        "$HOME/.steam/root/compatibilitytools.d"
+        "$HOME/.steam/root/steamapps/common"
+        "$HOME/.steam/steam/compatibilitytools.d"
+        "$HOME/.steam/steam/steamapps/common"
+        "$HOME/.steam/debian-installation/compatibilitytools.d"
+        "$HOME/.steam/debian-installation/steamapps/common"
+        "${XDG_DATA_HOME:-$HOME/.local/share}/Steam/compatibilitytools.d"
+        "${XDG_DATA_HOME:-$HOME/.local/share}/Steam/steamapps/common"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common"
+        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam/compatibilitytools.d"
+        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/common"
+        "$HOME/snap/steam/common/.local/share/Steam/compatibilitytools.d"
+        "$HOME/snap/steam/common/.local/share/Steam/steamapps/common"
+        "$HOME/snap/steam/common/Steam/compatibilitytools.d"
+        "$HOME/snap/steam/common/Steam/steamapps/common"
+    )
+    for _steam_library_root in "${_steam_library_roots[@]}"; do
+        _steam_scan_roots+=("$_steam_library_root/compatibilitytools.d")
+        _steam_scan_roots+=("$_steam_library_root/steamapps/common")
+    done
+
+    for _scan_root in "${_steam_scan_roots[@]}"; do
+        if [ ! -d "$_scan_root" ]; then
+            continue
+        fi
+        for _candidate in "$_scan_root"/*; do
+            [ -d "$_candidate" ] || continue
+            _collect_external_proton_candidate "$_candidate" "Steam"
+        done
+    done
+
+    _heroic_scan_roots=(
+        "$HOME/.config/heroic/tools/proton"
+        "$HOME/.config/Heroic/tools/proton"
+        "$HOME/.var/app/com.heroicgameslauncher.hgl/config/heroic/tools/proton"
+        "$HOME/.var/app/com.heroicgameslauncher.hgl/config/Heroic/tools/proton"
+        "$HOME/.var/app/com.heroicgameslauncher.hgl/data/heroic/tools/proton"
+        "$HOME/.var/app/com.heroicgameslauncher.hgl/data/Heroic/tools/proton"
+        "$HOME/snap/heroic/common/.config/heroic/tools/proton"
+        "$HOME/snap/heroic/common/.config/Heroic/tools/proton"
+    )
+
+    for _scan_root in "${_heroic_scan_roots[@]}"; do
+        if [ ! -d "$_scan_root" ]; then
+            continue
+        fi
+        for _candidate in "$_scan_root"/*; do
+            [ -d "$_candidate" ] || continue
+            _collect_external_proton_candidate "$_candidate" "Heroic"
+        done
+    done
+
+    _os_scan_roots=(
+        "/usr/share/steam/compatibilitytools.d"
+        "/usr/local/share/steam/compatibilitytools.d"
+        "/usr/share/Steam/compatibilitytools.d"
+        "/usr/lib/steam/compatibilitytools.d"
+        "/usr/lib64/steam/compatibilitytools.d"
+        "/usr/share/games/steam/compatibilitytools.d"
+        "/usr/local/share/games/steam/compatibilitytools.d"
+        "/usr/lib/games/steam/compatibilitytools.d"
+        "/usr/lib64/games/steam/compatibilitytools.d"
+        "/usr/libexec/steam/compatibilitytools.d"
+        "/usr/libexec/games/steam/compatibilitytools.d"
+        "/usr/share/steam/steamapps/common"
+        "/usr/lib/steam/steamapps/common"
+        "/usr/lib64/steam/steamapps/common"
+        "/usr/share/games/steam/steamapps/common"
+        "/usr/lib/games/steam/steamapps/common"
+        "/usr/lib64/games/steam/steamapps/common"
+        "/usr/libexec/steam/steamapps/common"
+        "/usr/libexec/games/steam/steamapps/common"
+        "/var/lib/flatpak/app/com.valvesoftware.Steam/current/active/files/extra/compatibilitytools.d"
+        "/var/lib/flatpak/app/com.valvesoftware.Steam/current/active/files/extra/steamapps/common"
+        "/var/lib/snapd/hostfs/usr/share/steam/compatibilitytools.d"
+        "/var/lib/snapd/hostfs/usr/lib/steam/compatibilitytools.d"
+    )
+
+    for _scan_root in "${_os_scan_roots[@]}"; do
+        if [ ! -d "$_scan_root" ]; then
+            continue
+        fi
+        for _candidate in "$_scan_root"/*; do
+            [ -d "$_candidate" ] || continue
+            _collect_external_proton_candidate "$_candidate" "OS"
+        done
+    done
+
+    unset -f _collect_external_proton_candidate
+}
+
+# MARK: select_existing_proton_runner()
+# Select a Steam/OS-provided Proton runner without downloading or deleting it.
+select_existing_proton_runner() {
+    if [ -z "$1" ]; then
+        debug_print exit "Script error: The select_existing_proton_runner function expects an index argument. Aborting."
+    elif [ -z "${external_proton_paths[$1]}" ]; then
+        debug_print exit "Script error: Invalid external Proton runner index in select_existing_proton_runner(). Aborting."
+    fi
+
+    selected_external_proton_path="${external_proton_paths[$1]}"
+    selected_external_proton_label="${external_proton_labels[$1]}"
+
+    if [ ! -x "$selected_external_proton_path/proton" ]; then
+        message warning "The selected Proton runner is no longer available:\n\n$selected_external_proton_path"
+        return 1
+    fi
+
+    install_dir="${install_dir:-$wine_prefix}"
+    mkdir -p "$install_dir"
+    echo "$selected_external_proton_path" > "$install_dir/current_runner"
+    chmod 644 "$install_dir/current_runner" 2>/dev/null || true
+
+    if ! create_or_update_launch_script; then
+        message error "Unable to update the launch script for the selected Proton runner."
+        return 1
+    fi
+
+    if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
+        create_desktop_files
+        refresh_desktop_execs
+    fi
+
+    message info "Launch environment updated to use:\n\n$selected_external_proton_label\n$selected_external_proton_path"
+}
+
+# MARK: select_existing_proton_runner_menu()
+# Present Steam/OS-provided Proton runners in a dedicated submenu.
+select_existing_proton_runner_menu() {
+    collect_external_proton_runners
+    get_current_runner
+
+    if [ "${#external_proton_paths[@]}" -eq 0 ]; then
+        message info "No Steam or OS-provided Proton runners were detected."
+        return 0
+    fi
+
+    menu_text_zenity="Select an existing Proton runner to use:"
+    menu_text_terminal="Select an existing Proton runner to use:"
+    menu_text_height="320"
+    menu_type="radiolist"
+    cancel_label="Go Back"
+    goback="Return to the Proton management menu"
+    unset menu_options
+    unset menu_actions
+    unset menu_default_choice
+
+    for (( i=0; i<${#external_proton_paths[@]}; i++ )); do
+        if [ "$current_runner_path" = "${external_proton_paths[i]}" ]; then
+            menu_option_text="${external_proton_labels[i]} (in use)"
+            menu_default_choice="${external_proton_labels[i]}"
+        else
+            menu_option_text="${external_proton_labels[i]}"
+        fi
+
+        menu_options+=("$menu_option_text")
+        menu_actions+=("select_existing_proton_runner $i")
+    done
+
+    menu_options+=("$goback")
+    menu_actions+=(":")
+
+    menu_height="$(($menu_option_height * ${#menu_options[@]} + $menu_text_height + $menu_text_height_zenity4))"
+    if [ "$menu_height" -gt "$menu_height_max" ]; then
+        menu_height="$menu_height_max"
+    fi
+
+    menu
 }
 
 # MARK: proton_manage()
@@ -2559,8 +2858,13 @@ download_select_install() {
     fi
 
     # Configure the menu
-    menu_text_zenity="Select the $download_type you want to install:"
-    menu_text_terminal="Select the $download_type you want to install:"
+    if [ "$download_type" = "proton" ]; then
+        menu_text_zenity="Select the Proton runner you want to use:"
+        menu_text_terminal="Select the Proton runner you want to use:"
+    else
+        menu_text_zenity="Select the $download_type you want to install:"
+        menu_text_terminal="Select the $download_type you want to install:"
+    fi
     menu_text_height="320"
     menu_type="radiolist"
     goback="Return to the $download_type management menu"
@@ -2606,7 +2910,7 @@ download_select_install() {
         # Build the menu item
         unset menu_option_text
         if [ "$download_type" = "proton" ]; then
-            if [ -d "${download_dir}/${download_basename}" ] && [ "$current_runner_basename" = "$download_basename" ]; then
+            if [ "$current_runner_path" = "${download_dir}/${download_basename}" ]; then
                 menu_option_text="$download_basename (in use)"
             elif [ -d "${download_dir}/${download_basename}" ]; then
                 menu_option_text="$download_basename (downloaded)"
@@ -2882,7 +3186,7 @@ download_select_delete() {
         # Build the menu item
         unset menu_option_text
         # Special handling for runners currently in use
-        if [ "$download_type" = "runner" ] && [ "$current_runner_basename" = "${installed_item_names[i]}" ]; then
+        if { [ "$download_type" = "runner" ] || [ "$download_type" = "proton" ]; } && [ "$current_runner_path" = "${installed_items[i]}" ]; then
             menu_option_text="${installed_item_names[i]}    [in-use]"
         else
             # Everything else
@@ -3249,7 +3553,20 @@ update_launch_script() {
     create_desktop_files needed
     refresh_desktop_execs
 
-    message info "Your game launch script has been updated/repaired.\n\nPath:\n$wine_prefix/$wine_launch_script_name"
+    helper_update_message=""
+    case "$sync_mfd_joystick_status" in
+        updated)
+            helper_update_message="\n\nThe adjacent MFD helper script was updated as well:\n$sync_mfd_joystick_path"
+            ;;
+        current)
+            helper_update_message="\n\nThe adjacent MFD helper script is already current:\n$sync_mfd_joystick_path"
+            ;;
+        failed)
+            helper_update_message="\n\nThe adjacent MFD helper script was detected but could not be updated:\n$sync_mfd_joystick_path"
+            ;;
+    esac
+
+    message info "Your game launch script has been updated/repaired.\n\nPath:\n$wine_prefix/$wine_launch_script_name$helper_update_message"
 }
 
 # MARK: edit_launch_script()
