@@ -338,6 +338,8 @@ fi
 # Falcon 4.0 Installer on GoG
 gog_url="https://www.gog.com/downloads/falcon_gold/61603"
 gog_installer="setup_falcon_4_2.0.0.1.exe"
+falcon4_source="gog"
+steam_falcon4_dir=""
 if [ -z "$bms_installer" ]; then
     bms_installer="Falcon BMS_4.38.0_Full_Setup.exe"
 fi
@@ -4470,7 +4472,21 @@ install_game() {
         return 1
     fi
 
-    download_gog_installer
+    choose_falcon4_source
+    if [ "$?" -eq 1 ]; then
+        cleanup_conf_if_only_firstrun
+        return 1
+    fi
+
+    if [ "$falcon4_source" = "gog" ]; then
+        download_gog_installer
+        if [ "$?" -eq 1 ]; then
+            message error "Unable to prepare Falcon 4.0 from GOG. Aborting."
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+    fi
+
     download_bms_installer
     # Abort if the download failed
     if [ "$?" -eq 1 ]; then
@@ -4557,13 +4573,41 @@ install_game() {
     wine reg add "HKEY_CURRENT_USER\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 96 /f >>"$tmp_install_log" 2>&1
 
 
-    # Run the Falcon 4.0 GoG installer
-    debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
-    progress_update "Running Falcon 4.0 GoG installer..."
-    if [ -n "$selected_gog_installer" ]; then
-        wine "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+    if [ "$falcon4_source" = "steam" ]; then
+        # Create Falcon 4.0 target directory in the Proton/Wine C: drive,
+        # then mirror files from the Steam installation.
+        steam_target_dir="$install_dir/drive_c/Falcon 4.0"
+        progress_update "Copying Steam Falcon 4.0 files into the Wine prefix..."
+        debug_print continue "Copying Steam Falcon 4.0 files from $steam_falcon4_dir to $steam_target_dir"
+        mkdir -p "$steam_target_dir" >>"$tmp_install_log" 2>&1
+        cp -a "$steam_falcon4_dir"/. "$steam_target_dir"/ >>"$tmp_install_log" 2>&1
+        copy_exit_code="$?"
+        if [ "$copy_exit_code" -ne 0 ] || [ ! -f "$steam_target_dir/falcon4.exe" ]; then
+            wineserver -k
+            progress_bar stop
+            message error "Failed to copy Steam Falcon 4.0 files into the Wine prefix.\nThe install log was written to\n$tmp_install_log"
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+
+        progress_update "Applying Falcon 4.0 registry keys..."
+        apply_falcon4_registry_key >>"$tmp_install_log" 2>&1
+        if [ "$?" -ne 0 ]; then
+            wineserver -k
+            progress_bar stop
+            message error "Falcon 4.0 registry initialization failed.\nThe install log was written to\n$tmp_install_log"
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
     else
-        wine "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        # Run the Falcon 4.0 GoG installer
+        debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
+        progress_update "Running Falcon 4.0 GoG installer..."
+        if [ -n "$selected_gog_installer" ]; then
+            wine "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        else
+            wine "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        fi
     fi
 
     # Run the Falcon BMS installer
@@ -4951,6 +4995,122 @@ download_protontricks() {
     protontricks_bin="$(command -v protontricks 2>/dev/null || true)"
     if [ -z "$protontricks_bin" ] || [ ! -x "$protontricks_bin" ]; then
         message error "Unable to locate protontricks. Please install protontricks and retry."
+        return 1
+    fi
+
+    return 0
+}
+
+# MARK: detect_steam_falcon4_install()
+# Detect Falcon 4.0 in known Steam default locations
+detect_steam_falcon4_install() {
+    steam_falcon4_dir=""
+    local candidates=(
+        "$HOME/.steam/steam/steamapps/common/Falcon 4.0"
+        "$HOME/.steam/root/steamapps/common/Falcon 4.0"
+        "$HOME/.local/share/Steam/steamapps/common/Falcon 4.0"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/Falcon 4.0"
+    )
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [ -d "$candidate" ] && [ -f "$candidate/falcon4.exe" ]; then
+            steam_falcon4_dir="$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# MARK: select_steam_falcon4_install()
+# Ask the user to select their Steam Falcon 4.0 folder and validate falcon4.exe
+select_steam_falcon4_install() {
+    local default_dir="$HOME/.steam/steam/steamapps/common/Falcon 4.0"
+    local selected_dir=""
+
+    if [ "$use_zenity" -eq 1 ]; then
+        selected_dir="$(zenity --file-selection --directory --title="Select Steam Falcon 4.0 directory" --filename="$default_dir/" 2>/dev/null)"
+        if [ -z "$selected_dir" ]; then
+            message error "No Steam Falcon 4.0 directory selected. Aborting installation."
+            return 1
+        fi
+    else
+        printf "Enter your Steam Falcon 4.0 directory\nExample: %s\n\n" "$default_dir"
+        read -rp "Directory path: " selected_dir
+        if [ -z "$selected_dir" ]; then
+            message error "No Steam Falcon 4.0 directory provided. Aborting installation."
+            return 1
+        fi
+    fi
+
+    if [ ! -d "$selected_dir" ] || [ ! -f "$selected_dir/falcon4.exe" ]; then
+        message error "Invalid Steam Falcon 4.0 directory. Expected to find falcon4.exe in:\n$selected_dir\n\nInstallation cancelled."
+        return 1
+    fi
+
+    steam_falcon4_dir="$selected_dir"
+    return 0
+}
+
+# MARK: choose_falcon4_source()
+# Ask user whether Falcon 4.0 should come from Steam; fallback to GOG by default
+choose_falcon4_source() {
+    falcon4_source="gog"
+    steam_falcon4_dir=""
+
+    if message question "Do you have Falcon 4.0 installed from Steam?\n\nSelect 'No' to use the default GOG installer flow."; then
+        falcon4_source="steam"
+        if detect_steam_falcon4_install; then
+            message info "Steam Falcon 4.0 detected at:\n$steam_falcon4_dir"
+            return 0
+        fi
+
+        message warning "Steam Falcon 4.0 was not found in default locations.\nPlease select your Falcon 4.0 folder manually."
+        if ! select_steam_falcon4_install; then
+            return 1
+        fi
+    else
+        falcon4_source="gog"
+    fi
+
+    return 0
+}
+
+# MARK: apply_falcon4_registry_key()
+# Import Falcon 4.0 registry keys into the current prefix without external files
+apply_falcon4_registry_key() {
+    if [ -z "$WINEPREFIX" ] || [ ! -d "$WINEPREFIX/drive_c" ]; then
+        message error "Unable to apply Falcon 4.0 registry key: Wine prefix is not ready."
+        return 1
+    fi
+
+    local falcon4_reg_file="$WINEPREFIX/drive_c/falcon_4.reg"
+    cat > "$falcon4_reg_file" << 'EOF'
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse]
+
+[HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse\\Falcon]
+
+[HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse\\Falcon\\4.0]
+"baseDir"="C:\\Falcon 4.0"
+"misctexDir"="C:\\Falcon 4.0\\terrdata\\misctex"
+"movieDir"="C:\\Falcon 4.0"
+"objectDir"="C:\\Falcon 4.0\\terrdata\\objects"
+"theaterDir"="C:\\Falcon 4.0\\terrdata\\korea"
+
+[HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse\\Falcon\\4.0\\MPR]
+"MPRDetect3Dx"=dword:00000001
+"MPRDetectCPU"=dword:00000001
+"MPRDetectMMX"=dword:00000001
+"MPRDetectXMM"=dword:00000001
+EOF
+
+    wine regedit /S "C:\\falcon_4.reg"
+    local reg_exit_code="$?"
+    rm -f "$falcon4_reg_file" 2>/dev/null || true
+
+    if [ "$reg_exit_code" -ne 0 ]; then
+        message error "Failed to apply Falcon 4.0 registry keys."
         return 1
     fi
 
