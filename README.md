@@ -17,7 +17,7 @@ Configuration is saved in *$XDG_CONFIG_HOME/bms-helper/*
     - This limits the maximum number of open files on your system.  On some Linux distributions, the default is set too low for Falcon BMS
 
 `Install Falcon BMS`
-- Installs Falcon BMS and Falcon 4.0 (GoG installer)
+- Installs Falcon BMS (public installs also require Falcon 4.0 from GoG or Steam; internal installs do not)
 
 `Maintenance and Troubleshooting`
 - `Target a different Falcon BMS installation`
@@ -50,7 +50,8 @@ Configuration is saved in *$XDG_CONFIG_HOME/bms-helper/*
 **From Source:**
 1. Download it! https://github.com/benchmarksims/bms-helper/releases
 2. Extract it!
-3. Place `Falcon BMS_4.38.1_Full_Setup.exe`, `Falcon BMS_4.38.1_Full_Setup.nsisbin` and `setup_falcon_4_2.0.0.1.exe` (from GoG) in the bms-helper extracted folder
+3. Public install: place `Falcon BMS_4.38.1_Full_Setup.exe`, `Falcon BMS_4.38.1_Full_Setup.nsisbin` and `setup_falcon_4_2.0.0.1.exe` (from GoG) in the bms-helper extracted folder
+4. Internal install: place the internal Falcon BMS installer package in the helper folder (Falcon 4.0 media is not required)
 4. Run the `bms-helper.sh`!
 
 _Dependencies: **bash**, **coreutils**, **curl**, **polkit**, **wine**, **protontricks**_
