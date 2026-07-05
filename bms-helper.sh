@@ -4027,6 +4027,22 @@ build_bms_installer_args() {
     return 0
 }
 
+run_bms_installer_command() {
+    local runner_binary="$1"
+    local timeout_seconds="$2"
+    local installer_path="$3"
+    shift 3
+
+    local -a installer_cmd=("$runner_binary" "$installer_path" "$@")
+    debug_print continue "Falcon BMS installer command: $(printf '%q ' "${installer_cmd[@]}")"
+
+    if [ -x "$(command -v timeout)" ] && [ -n "$timeout_seconds" ]; then
+        timeout --foreground "$timeout_seconds" "${installer_cmd[@]}"
+    else
+        "${installer_cmd[@]}"
+    fi
+}
+
 reinstall_bms_launcher() {
     # Update directories
     getdirs
@@ -4079,11 +4095,7 @@ reinstall_bms_launcher() {
         return 1
     fi
 
-    if [ -x "$(command -v timeout)" ] && [ -n "$launcher_timeout_seconds" ]; then
-        timeout --foreground "$launcher_timeout_seconds" "$launcher_winepath"/wine "$reinstall_installer_path" "${installer_args[@]}"
-    else
-        "$launcher_winepath"/wine "$reinstall_installer_path" "${installer_args[@]}"
-    fi
+    run_bms_installer_command "$launcher_winepath/wine" "$launcher_timeout_seconds" "$reinstall_installer_path" "${installer_args[@]}"
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 58 ] || [ "$exit_code" -eq 124 ]; then
@@ -4773,17 +4785,9 @@ install_game() {
     debug_print continue "Falcon BMS selected arguments: ${installer_args[*]}"
 
     if [ -n "$selected_bms_installer" ]; then
-        if [ -x "$(command -v timeout)" ] && [ -n "$installer_timeout_seconds" ]; then
-            timeout --foreground "$installer_timeout_seconds" wine "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
-        else
-            wine "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
-        fi
+        run_bms_installer_command "wine" "$installer_timeout_seconds" "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
     else
-        if [ -x "$(command -v timeout)" ] && [ -n "$installer_timeout_seconds" ]; then
-            timeout --foreground "$installer_timeout_seconds" wine "$SCRIPT_DIR/$bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
-        else
-            wine "$SCRIPT_DIR/$bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
-        fi
+        run_bms_installer_command "wine" "$installer_timeout_seconds" "$SCRIPT_DIR/$bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
     fi
 
     exit_code="$?"
