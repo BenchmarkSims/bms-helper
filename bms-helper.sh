@@ -5183,32 +5183,45 @@ detect_steam_falcon4_install() {
 
 # MARK: select_steam_falcon4_install()
 # Ask the user to select their Steam Falcon 4.0 folder and validate falcon4.exe
+# Allows retrying so non-standard Steam library locations can be selected.
 select_steam_falcon4_install() {
     local default_dir="$HOME/.steam/steam/steamapps/common/Falcon 4.0"
     local selected_dir=""
 
-    if [ "$use_zenity" -eq 1 ]; then
-        selected_dir="$(zenity --file-selection --directory --title="Select Steam Falcon 4.0 directory" --filename="$default_dir/" 2>/dev/null)"
-        if [ -z "$selected_dir" ]; then
-            message error "No Steam Falcon 4.0 directory selected. Aborting installation."
+    while true; do
+        selected_dir=""
+
+        if [ "$use_zenity" -eq 1 ]; then
+            selected_dir="$(zenity --file-selection --directory --title="Select Steam Falcon 4.0 directory" --filename="$default_dir/" 2>/dev/null)"
+            if [ -z "$selected_dir" ]; then
+                if message question "No directory was selected. Would you like to try again?"; then
+                    continue
+                fi
+                message error "No Steam Falcon 4.0 directory selected. Aborting installation."
+                return 1
+            fi
+        else
+            printf "Enter your Steam Falcon 4.0 directory\nExample: %s\n\n" "$default_dir"
+            read -rp "Directory path: " selected_dir
+            if [ -z "$selected_dir" ]; then
+                if message question "No directory was provided. Would you like to try again?"; then
+                    continue
+                fi
+                message error "No Steam Falcon 4.0 directory provided. Aborting installation."
+                return 1
+            fi
+        fi
+
+        if [ -d "$selected_dir" ] && [ -f "$selected_dir/falcon4.exe" ]; then
+            steam_falcon4_dir="$selected_dir"
+            return 0
+        fi
+
+        if ! message question "Invalid Steam Falcon 4.0 directory. Expected to find falcon4.exe in:\n$selected_dir\n\nWould you like to choose another folder?"; then
+            message error "Invalid Steam Falcon 4.0 directory. Installation cancelled."
             return 1
         fi
-    else
-        printf "Enter your Steam Falcon 4.0 directory\nExample: %s\n\n" "$default_dir"
-        read -rp "Directory path: " selected_dir
-        if [ -z "$selected_dir" ]; then
-            message error "No Steam Falcon 4.0 directory provided. Aborting installation."
-            return 1
-        fi
-    fi
-
-    if [ ! -d "$selected_dir" ] || [ ! -f "$selected_dir/falcon4.exe" ]; then
-        message error "Invalid Steam Falcon 4.0 directory. Expected to find falcon4.exe in:\n$selected_dir\n\nInstallation cancelled."
-        return 1
-    fi
-
-    steam_falcon4_dir="$selected_dir"
-    return 0
+    done
 }
 
 # MARK: choose_falcon4_source()
