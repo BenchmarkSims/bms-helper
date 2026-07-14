@@ -5266,6 +5266,23 @@ apply_falcon4_registry_key() {
     cat > "$falcon4_reg_file" << 'EOF'
 Windows Registry Editor Version 5.00
 
+[HKEY_LOCAL_MACHINE\\Software\\MicroProse]
+
+[HKEY_LOCAL_MACHINE\\Software\\MicroProse\\Falcon]
+
+[HKEY_LOCAL_MACHINE\\Software\\MicroProse\\Falcon\\4.0]
+"baseDir"="C:\\Falcon 4.0"
+"misctexDir"="C:\\Falcon 4.0\\terrdata\\misctex"
+"movieDir"="C:\\Falcon 4.0"
+"objectDir"="C:\\Falcon 4.0\\terrdata\\objects"
+"theaterDir"="C:\\Falcon 4.0\\terrdata\\korea"
+
+[HKEY_LOCAL_MACHINE\\Software\\MicroProse\\Falcon\\4.0\\MPR]
+"MPRDetect3Dx"=dword:00000001
+"MPRDetectCPU"=dword:00000001
+"MPRDetectMMX"=dword:00000001
+"MPRDetectXMM"=dword:00000001
+
 [HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse]
 
 [HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse\\Falcon]
