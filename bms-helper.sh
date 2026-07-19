@@ -194,8 +194,9 @@ set_bms_mode "$bms_mode"
 PROTON_DEFAULT_VERSION="GE-Proton10-32"
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-# Path to bundled icon
+# Paths to bundled icons
 bms_icon="$SCRIPT_DIR/bms-launcher.png"
+bms_icon_256="$SCRIPT_DIR/bms-launcher-256.png"
 
 # Use XDG base directories if defined
 if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs" ]; then
@@ -338,6 +339,8 @@ fi
 # Falcon 4.0 Installer on GoG
 gog_url="https://www.gog.com/downloads/falcon_gold/61603"
 gog_installer="setup_falcon_4_2.0.0.1.exe"
+falcon4_source="gog"
+steam_falcon4_dir=""
 if [ -z "$bms_installer" ]; then
     bms_installer="Falcon BMS_4.38.0_Full_Setup.exe"
 fi
@@ -1214,9 +1217,6 @@ if [ -d "\$WINEPREFIX/drive_c" ]; then
     fi
 fi
 
-# Keep desktop entries stable and favor native .NET runtime components.
-# mscoree=n prevents accidental fallback to Wine Mono for .NET Framework apps.
-export WINEDLLOVERRIDES="winemenubuilder.exe=d;mscoree=n,b"
 export WINEDEBUG="\${WINEDEBUG:--all}"
 unset SDL_VIDEODRIVER
 
@@ -1236,7 +1236,7 @@ export BMS_USE_MANGOHUD="\${BMS_USE_MANGOHUD:-0}"
 export BMS_PROTON_LOG="\${BMS_PROTON_LOG:-0}"
 export BMS_USE_FSYNC="\${BMS_USE_FSYNC:-1}"
 export BMS_USE_ESYNC="\${BMS_USE_ESYNC:-1}"
-export BMS_AUTO_LAUNCH_OPENTRACK="\${BMS_AUTO_LAUNCH_OPENTRACK:-1}"
+export BMS_AUTO_LAUNCH_OPENTRACK="\${BMS_AUTO_LAUNCH_OPENTRACK:-0}"
 export BMS_OPENTRACK_DELAY="\${BMS_OPENTRACK_DELAY:-3}"
 
 if [ "\$BMS_USE_FSYNC" != "1" ]; then
@@ -1912,6 +1912,73 @@ EOF
     return 0
 }
 
+# MARK: ensure_bms_icon_installed()
+# Install/refresh the bundled icon in the user's local hicolor icon directory.
+ensure_bms_icon_installed() {
+    icon_target_dir_256="${data_dir}/icons/hicolor/256x256/apps"
+    icon_target_dir_512="${data_dir}/icons/hicolor/512x512/apps"
+    icon_target_dir_pixmaps="${data_dir}/pixmaps"
+    icon_target_path_256="${icon_target_dir_256}/bms-launcher.png"
+    icon_target_path_512="${icon_target_dir_512}/bms-launcher.png"
+    icon_target_path_pixmaps="${icon_target_dir_pixmaps}/bms-launcher.png"
+    icon_prefix_path=""
+    icon_source_512="$bms_icon"
+    icon_source_256="$bms_icon_256"
+
+    if [ ! -f "$icon_source_512" ]; then
+        debug_print continue "Bundled icon was not found at $icon_source_512"
+        return 1
+    fi
+
+    if [ ! -s "$icon_source_512" ]; then
+        debug_print continue "Bundled icon is empty and cannot be installed: $icon_source_512"
+        return 1
+    fi
+
+    # Prefer the bundled 256 icon for 256x256 installs, fallback to 512 if missing.
+    if [ ! -f "$icon_source_256" ] || [ ! -s "$icon_source_256" ]; then
+        icon_source_256="$icon_source_512"
+    fi
+
+    mkdir -p "$icon_target_dir_256" "$icon_target_dir_512" "$icon_target_dir_pixmaps" || return 1
+
+    # Force overwrite so repair/recreate always refreshes stale or corrupted icons.
+    if ! cp -f -- "$icon_source_256" "$icon_target_path_256"; then
+        debug_print continue "Failed to copy icon to $icon_target_path_256"
+        return 1
+    fi
+    if ! cp -f -- "$icon_source_512" "$icon_target_path_512"; then
+        debug_print continue "Failed to copy icon to $icon_target_path_512"
+        return 1
+    fi
+    if ! cp -f -- "$icon_source_512" "$icon_target_path_pixmaps"; then
+        debug_print continue "Failed to copy icon to $icon_target_path_pixmaps"
+        return 1
+    fi
+
+    if [ ! -s "$icon_target_path_256" ] || [ ! -s "$icon_target_path_512" ] || [ ! -s "$icon_target_path_pixmaps" ]; then
+        debug_print continue "Installed icon appears empty in one or more target locations"
+        return 1
+    fi
+
+    # Also place the icon beside the generated launcher in the prefix root.
+    # This allows desktop files to use an absolute icon path that does not depend on icon themes.
+    if [ -n "$install_dir" ] && [ -d "$install_dir" ]; then
+        icon_prefix_path="$install_dir/bms-launcher.png"
+        if ! cp -f -- "$icon_source_512" "$icon_prefix_path"; then
+            debug_print continue "Failed to copy icon beside launcher: $icon_prefix_path"
+        fi
+    fi
+
+    # Refresh icon cache when available so desktop environments pick the new icon.
+    if [ -x "$(command -v gtk-update-icon-cache)" ]; then
+        gtk-update-icon-cache -q -t "${data_dir}/icons/hicolor" >/dev/null 2>&1 || true
+    fi
+
+    debug_print continue "Installed icon to $icon_target_path_256"
+    return 0
+}
+
 
 ############################################################################
 ######## begin preflight check functions ###################################
@@ -1939,7 +2006,10 @@ preflight_check() {
     unset preflight_followup
     unset preflight_fail_string
     unset preflight_pass_string
+    unset preflight_manual_string
     unset preflight_fix_results_string
+    unset preflight_root_actions_string
+    unset preflight_user_actions_string
     unset install_mode
     retval=0
 
@@ -2135,7 +2205,13 @@ mapcount_check() {
     if [ "$mapcount" -ge 16777216 ]; then
         # All good
         preflight_pass+=("vm.max_map_count is set to $mapcount.")
-    elif grep -E -x -q "vm.max_map_count" /etc/sysctl.conf /etc/sysctl.d/* 2>/dev/null; then
+    elif awk '
+        /^[[:space:]]*#/ { next }
+        match($0, /^[[:space:]]*vm\.max_map_count[[:space:]]*=[[:space:]]*([0-9]+)/, m) {
+            if (m[1] >= 16777216) found=1
+        }
+        END { exit(found ? 0 : 1) }
+    ' /etc/sysctl.conf /etc/sysctl.d/* 2>/dev/null; then
         # Was it supposed to have been set by sysctl?
         preflight_fail+=("vm.max_map_count is configured to at least 16777216 but the setting has not been loaded by your system.")
         # Add the function that will be called to change the configuration
@@ -3927,6 +4003,46 @@ install_powershell() {
 
 # MARK: reinstall_bms_launcher()
 # Download and re-install the latest Falcon BMS into the wine prefix
+# MARK: build_bms_installer_args()
+# Build installer argument array for public/internal variants.
+build_bms_installer_args() {
+    installer_args=("/S")
+
+    # Keep installer behavior consistent across public/internal builds.
+    installer_args+=("/noshort")
+
+    if [ "${use_16k_tiles:-}" = "1" ]; then
+        installer_args+=("/16k")
+    fi
+
+    if [ "$bms_mode" = "internal" ]; then
+        bms_key="$(echo "${bms_key:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        if [ -z "$bms_key" ]; then
+            message error "Internal installer key is required for internal Falcon BMS installs.\n\nPlease run install again and enter a valid key."
+            return 1
+        fi
+        installer_args+=("/key=$bms_key")
+    fi
+
+    return 0
+}
+
+run_bms_installer_command() {
+    local runner_binary="$1"
+    local timeout_seconds="$2"
+    local installer_path="$3"
+    shift 3
+
+    local -a installer_cmd=("$runner_binary" "$installer_path" "$@")
+    debug_print continue "Falcon BMS installer command: $(printf '%q ' "${installer_cmd[@]}")"
+
+    if [ -x "$(command -v timeout)" ] && [ -n "$timeout_seconds" ]; then
+        timeout --foreground "$timeout_seconds" "${installer_cmd[@]}"
+    else
+        "${installer_cmd[@]}"
+    fi
+}
+
 reinstall_bms_launcher() {
     # Update directories
     getdirs
@@ -3937,7 +4053,7 @@ reinstall_bms_launcher() {
         return 1
     fi
 
-    download_gog_installer
+    download_bms_installer
     # Abort if the download failed
     if [ "$?" -eq 1 ]; then
         message error "Unable to install or update the Falcon BMS."
@@ -3957,22 +4073,40 @@ reinstall_bms_launcher() {
 
     # Set the correct wine prefix
     export WINEPREFIX="$wine_prefix"
-    export WINEDLLOVERRIDES=""
 
     # Show a zenity pulsating progress bar
     progress_bar start "Installing Falcon BMS. Please wait..."
     progress_update "Running Falcon BMS installer..."
 
+    # Guard against a stalled installer process.
+    launcher_timeout_seconds="${BMS_INSTALLER_TIMEOUT_SECONDS:-7200}"
+
     # Run the installer
     debug_print continue "Installing Falcon BMS. Please wait; this will take a moment..."
-    "$launcher_winepath"/wine "$tmp_dir/$gog_installer" /S
+    reinstall_installer_path=""
+    if [ -n "$selected_bms_installer" ]; then
+        reinstall_installer_path="$selected_bms_installer"
+    else
+        reinstall_installer_path="$SCRIPT_DIR/$bms_installer"
+    fi
+
+    if ! build_bms_installer_args; then
+        progress_bar stop
+        return 1
+    fi
+
+    run_bms_installer_command "$launcher_winepath/wine" "$launcher_timeout_seconds" "$reinstall_installer_path" "${installer_args[@]}"
 
     exit_code="$?"
-    if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 58 ]; then
+    if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 58 ] || [ "$exit_code" -eq 124 ]; then
         # User cancelled or there was an error
         "$launcher_winepath"/wineserver -k # Kill all wine processes
         progress_bar stop # Stop the zenity progress window
-        message error "Installation aborted. See terminal output for details."
+        if [ "$exit_code" -eq 124 ]; then
+            message error "Installation timed out after ${launcher_timeout_seconds} seconds.\n\nThis usually means the installer is waiting on a hidden dialog or got stuck.\nCheck terminal output for details."
+        else
+            message error "Installation aborted. See terminal output for details."
+        fi
         return 1
     fi
 
@@ -4097,8 +4231,11 @@ uninstall_bms() {
 
     # Remove desktop files and icon
     rm -f -- "$prefix_desktop_file" "$localshare_desktop_file" "$home_desktop_file"
-    # Also remove legacy shortcut names used before mode-specific desktop files.
-    rm -f -- "$legacy_prefix_desktop_file" "$legacy_localshare_desktop_file" "$legacy_home_desktop_file"
+    # Also remove legacy shortcut names used before mode-specific desktop files,
+    # but only if we're in public mode (legacy files use public mode name "Falcon BMS.desktop")
+    if [ "$bms_mode" = "public" ]; then
+        rm -f -- "$legacy_prefix_desktop_file" "$legacy_localshare_desktop_file" "$legacy_home_desktop_file"
+    fi
     rm -f -- "$icon_file"
 
     # Update desktop database
@@ -4470,7 +4607,27 @@ install_game() {
         return 1
     fi
 
-    download_gog_installer
+    if [ "$bms_mode" != "internal" ]; then
+        choose_falcon4_source
+        if [ "$?" -eq 1 ]; then
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+
+        if [ "$falcon4_source" = "gog" ]; then
+            download_gog_installer
+            if [ "$?" -eq 1 ]; then
+                message error "Unable to prepare Falcon 4.0 from GOG. Aborting."
+                cleanup_conf_if_only_firstrun
+                return 1
+            fi
+        fi
+    else
+        # Internal installs do not require Falcon 4.0 media.
+        falcon4_source="none"
+        steam_falcon4_dir=""
+    fi
+
     download_bms_installer
     # Abort if the download failed
     if [ "$?" -eq 1 ]; then
@@ -4521,22 +4678,68 @@ install_game() {
     #export WINE="$wine_path/wine"
     #export WINESERVER="$wine_path/wineserver"
     export WINEPREFIX="$install_dir"
-    export WINEDLLOVERRIDES=""
+
+    install_wine_bin="$(command -v wine 2>/dev/null || true)"
+    install_wineserver_bin="$(command -v wineserver 2>/dev/null || true)"
+    if [ -f "$install_dir/current_runner" ]; then
+        install_runner_dir="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
+        if [ -n "$install_runner_dir" ] && [ -x "$install_runner_dir/files/bin/wine" ]; then
+            install_wine_bin="$install_runner_dir/files/bin/wine"
+            install_wineserver_bin="$install_runner_dir/files/bin/wineserver"
+        elif [ -n "$install_runner_dir" ] && [ -x "$install_runner_dir/bin/wine" ]; then
+            install_wine_bin="$install_runner_dir/bin/wine"
+            install_wineserver_bin="$install_runner_dir/bin/wineserver"
+        elif [ -n "$install_runner_dir" ] && [ -x "$install_runner_dir/wine" ]; then
+            install_wine_bin="$install_runner_dir/wine"
+            install_wineserver_bin="$install_runner_dir/wineserver"
+        fi
+    fi
+
+    if [ -z "$install_wine_bin" ] || [ ! -x "$install_wine_bin" ]; then
+        message error "No usable Wine binary was found for installation."
+        cleanup_conf_if_only_firstrun
+        return 1
+    fi
+
+    if [ -z "$install_wineserver_bin" ] || [ ! -x "$install_wineserver_bin" ]; then
+        install_wineserver_bin=""
+    fi
+
+    # Timeouts for long-running install stages (override via environment if needed).
+    prefix_setup_timeout_seconds="${BMS_PREFIX_SETUP_TIMEOUT_SECONDS:-5400}"
+    installer_timeout_seconds="${BMS_INSTALLER_TIMEOUT_SECONDS:-7200}"
 
     # Show a zenity pulsating progress bar
     progress_bar start "Preparing Wine prefix and installing Falcon BMS. Please wait..."
     progress_update "Preparing Wine prefix..."
 
-    # Create the new prefix and install powershell
+    # Create the new prefix and install required runtime components.
     progress_update "Installing required components into the Wine prefix..."
     debug_print continue "Installing required components into the Wine prefix. Please wait; this will take a moment..."
-    "$protontricks_bin" -q corefonts tahoma lucida verdana dxvk powershell dotnet48 win11 >"$tmp_install_log" 2>&1
+
+    # Let the game installer handle .NET 4.8.1 by default.
+    # Set BMS_PREINSTALL_DOTNET48=1 only if you explicitly want helper-side dotnet48 preinstall.
+    prefix_components=(corefonts tahoma lucida verdana dxvk powershell win11)
+    if [ "${BMS_PREINSTALL_DOTNET48:-0}" = "1" ]; then
+        prefix_components+=(dotnet48)
+    fi
+
+    if [ -x "$(command -v timeout)" ] && [ -n "$prefix_setup_timeout_seconds" ]; then
+        timeout --foreground "$prefix_setup_timeout_seconds" "$protontricks_bin" -q "${prefix_components[@]}" >"$tmp_install_log" 2>&1
+    else
+        "$protontricks_bin" -q "${prefix_components[@]}" >"$tmp_install_log" 2>&1
+    fi
 
     exit_code="$?"
-    if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ]; then
+    if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ] || [ "$exit_code" -eq 124 ]; then
         # 126 = permission denied (ie. noexec on /tmp)
-        wineserver -k # Kill all wine processes
+        if [ -n "$install_wineserver_bin" ]; then
+            "$install_wineserver_bin" -k
+        fi
         progress_bar stop # Stop the zenity progress window
+        if [ "$exit_code" -eq 124 ]; then
+            message warning "Wine prefix preparation timed out after ${prefix_setup_timeout_seconds} seconds.\n\nThe install log was written to\n$tmp_install_log\n\nThis usually means a hidden installer dialog blocked automation."
+        fi
         if message question "Wine prefix creation failed. Aborting installation.\nThe install log was written to\n$tmp_install_log\n\nDo you want to delete\n${install_dir}?"; then
             debug_print continue "Deleting $install_dir..."
             rm -r --interactive=never "$install_dir"
@@ -4546,7 +4749,7 @@ install_game() {
     fi
 
     # Add registry key that prevents wine from creating unnecessary file type associations
-    wine reg add "HKEY_CURRENT_USER\Software\Wine\FileOpenAssociations" /v Enable /d N /f >>"$tmp_install_log" 2>&1
+    "$install_wine_bin" reg add "HKEY_CURRENT_USER\Software\Wine\FileOpenAssociations" /v Enable /d N /f >>"$tmp_install_log" 2>&1
 
     # Fix oversized fonts in the WPF / MahApps.Metro .NET Launcher
     progress_update "Applying display scaling and font fixes..."
@@ -4554,56 +4757,83 @@ install_game() {
     curl -sL "https://github.com/mrbvrz/segoe-ui-linux/archive/refs/heads/master.tar.gz" | tar -xz -C "$tmp_dir"
     cp "$tmp_dir"/segoe-ui-linux-master/font/*.ttf "$install_dir/drive_c/windows/Fonts/" 2>/dev/null || true
     
-    wine reg add "HKEY_CURRENT_USER\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 96 /f >>"$tmp_install_log" 2>&1
+    "$install_wine_bin" reg add "HKEY_CURRENT_USER\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 96 /f >>"$tmp_install_log" 2>&1
 
 
-    # Run the Falcon 4.0 GoG installer
-    debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
-    progress_update "Running Falcon 4.0 GoG installer..."
-    if [ -n "$selected_gog_installer" ]; then
-        wine "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+    if [ "$falcon4_source" = "steam" ]; then
+        # Create Falcon 4.0 target directory in the Proton/Wine C: drive,
+        # then mirror files from the Steam installation.
+        steam_target_dir="$install_dir/drive_c/Falcon 4.0"
+        progress_update "Copying Steam Falcon 4.0 files into the Wine prefix..."
+        debug_print continue "Copying Steam Falcon 4.0 files from $steam_falcon4_dir to $steam_target_dir"
+        mkdir -p "$steam_target_dir" >>"$tmp_install_log" 2>&1
+        cp -a "$steam_falcon4_dir"/. "$steam_target_dir"/ >>"$tmp_install_log" 2>&1
+        copy_exit_code="$?"
+        if [ "$copy_exit_code" -ne 0 ] || [ ! -f "$steam_target_dir/falcon4.exe" ]; then
+            if [ -n "$install_wineserver_bin" ]; then
+                "$install_wineserver_bin" -k
+            fi
+            progress_bar stop
+            message error "Failed to copy Steam Falcon 4.0 files into the Wine prefix.\nThe install log was written to\n$tmp_install_log"
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+
+        progress_update "Applying Falcon 4.0 registry keys..."
+        apply_falcon4_registry_key "$install_wine_bin" >>"$tmp_install_log" 2>&1
+        if [ "$?" -ne 0 ]; then
+            if [ -n "$install_wineserver_bin" ]; then
+                "$install_wineserver_bin" -k
+            fi
+            progress_bar stop
+            message error "Falcon 4.0 registry initialization failed.\nThe install log was written to\n$tmp_install_log"
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
+    elif [ "$falcon4_source" = "gog" ]; then
+        # Run the Falcon 4.0 GoG installer
+        debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
+        progress_update "Running Falcon 4.0 GoG installer..."
+        if [ -n "$selected_gog_installer" ]; then
+            "$install_wine_bin" "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        else
+            "$install_wine_bin" "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        fi
     else
-        wine "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        debug_print continue "Internal mode selected: skipping Falcon 4.0 install/source requirements."
     fi
 
     # Run the Falcon BMS installer
     debug_print continue "Installing Falcon BMS. Please wait; this will take a moment..."
     progress_update "Running Falcon BMS installer..."
-    # Determine tiles argument (default: opt-out unless user explicitly chose)
-    if [ "${use_16k_tiles:-}" = "1" ]; then
-        tiles_arg="/16k"
-    else
-        tiles_arg=""
-    fi
-    # Determine key argument (for internal installers)
-    if [ -n "${bms_key:-}" ]; then
-        key_arg="/key=${bms_key}"
-    else
-        key_arg=""
-    fi
-    # Build installer argument array to avoid passing empty/split parameters
-    installer_args=("/S")
-    installer_args+=("/noshort")
-    if [ -n "$tiles_arg" ]; then
-        installer_args+=("$tiles_arg")
-    fi
-    if [ -n "$key_arg" ]; then
-        installer_args+=("$key_arg")
+    # Build installer arguments suitable for the selected release type.
+    if ! build_bms_installer_args; then
+        if [ -n "$install_wineserver_bin" ]; then
+            "$install_wineserver_bin" -k
+        fi
+        progress_bar stop
+        cleanup_conf_if_only_firstrun
+        return 1
     fi
     
     debug_print continue "Falcon BMS selected arguments: ${installer_args[*]}"
 
     if [ -n "$selected_bms_installer" ]; then
-        wine "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
+        run_bms_installer_command "$install_wine_bin" "$installer_timeout_seconds" "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
     else
-        wine "$SCRIPT_DIR/$bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
+        run_bms_installer_command "$install_wine_bin" "$installer_timeout_seconds" "$SCRIPT_DIR/$bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
     fi
 
     exit_code="$?"
-    if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 58 ]; then
+    if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 58 ] || [ "$exit_code" -eq 124 ]; then
         # User cancelled or there was an error
-        wineserver -k # Kill all wine processes
+        if [ -n "$install_wineserver_bin" ]; then
+            "$install_wineserver_bin" -k
+        fi
         progress_bar stop # Stop the zenity progress window
+        if [ "$exit_code" -eq 124 ]; then
+            message warning "Falcon BMS installer timed out after ${installer_timeout_seconds} seconds.\n\nThe install log was written to\n$tmp_install_log"
+        fi
         if message question "Installation aborted. The install log was written to\n$tmp_install_log\n\nDo you want to delete\n${install_dir}?"; then
             debug_print continue "Deleting $install_dir..."
             rm -r --interactive=never "$install_dir"
@@ -4616,7 +4846,9 @@ install_game() {
     progress_bar stop
 
     # Kill the wine process after installation
-    wineserver -k
+    if [ -n "$install_wineserver_bin" ]; then
+        "$install_wineserver_bin" -k
+    fi
 
     # Save the install location to the Helper's config files
     reset_helper "switchprefix"
@@ -4641,15 +4873,9 @@ install_game() {
     fi
     installed_launch_script="$install_dir/$wine_launch_script_name"
 
-    # Copy the bundled Falcon BMS icon to the .local icons directory
-    if [ -f "$bms_icon" ]; then
-        mkdir -p "${data_dir}/icons/hicolor/256x256/apps" && 
-        cp "$bms_icon" "${data_dir}/icons/hicolor/256x256/apps"
-        # also copy to standard name to ensure icon matches desktop file
-        icon_installed_path="${data_dir}/icons/hicolor/256x256/apps/$(basename "$bms_icon")"
-        if [ -f "$icon_installed_path" ]; then
-            debug_print continue "Installed icon to $icon_installed_path"
-        fi
+    # Copy/refresh the bundled Falcon BMS icon in the local icon theme.
+    if ! ensure_bms_icon_installed; then
+        debug_print continue "Warning: unable to install or refresh desktop icon from $bms_icon"
     fi
 
     # Create .desktop files
@@ -4681,12 +4907,15 @@ create_desktop_files() {
     # $HOME/Desktop/<desktop file>
     home_desktop_file="${XDG_DESKTOP_DIR:-$HOME/Desktop}/$bms_desktop_basename"
 
-    create_desktop_files="true"
-    # If the "needed" argument is passed, determine if we need to create system desktop files
+    create_localshare_file="true"
+    create_home_file="true"
+    # If the "needed" argument is passed, only create missing desktop files.
     if [ "$1" = "needed" ]; then
-        if [ -f "$localshare_desktop_file" ] || [ -f "$home_desktop_file" ]; then
-            # If either desktop file already exists, don't overwrite/replace them
-            create_desktop_files="false"
+        if [ -f "$localshare_desktop_file" ]; then
+            create_localshare_file="false"
+        fi
+        if [ -f "$home_desktop_file" ]; then
+            create_home_file="false"
         fi
     fi
 
@@ -4694,10 +4923,18 @@ create_desktop_files() {
     # The backup .desktop file in the prefix directory will always be created so it's up to date
     # Use the configured base dir (public vs internal) when building Exec/Path
     escaped_base_dir="$(echo "$bms_base_dir" | sed "s/\\\\/\\\\\\\\/g; s/'/\\'"/g)"
-    icon_installed_path="${data_dir}/icons/hicolor/256x256/apps/$(basename "$bms_icon")"
 
     # Ensure install_dir is set (fallback to wine_prefix)
     install_dir="${install_dir:-$wine_prefix}"
+
+    if ! ensure_bms_icon_installed; then
+        debug_print continue "Warning: unable to install or refresh desktop icon from $bms_icon"
+    fi
+
+    desktop_icon_value="bms-launcher"
+    if [ -n "$install_dir" ] && [ -s "$install_dir/bms-launcher.png" ]; then
+        desktop_icon_value="$install_dir/bms-launcher.png"
+    fi
 
     # Ensure launch script exists and is up to date
     create_or_update_launch_script || true
@@ -4758,17 +4995,22 @@ Categories=Game;
 StartupWMClass=FalconBMS_Alternative_Launcher.exe
 $exec_line
 Path=$install_dir/drive_c/$bms_base_dir/Launcher/
-Icon=bms-launcher" > "$prefix_desktop_file"
+Icon=$desktop_icon_value" > "$prefix_desktop_file"
 
-    if [ "$create_desktop_files" = "true" ]; then
-        debug_print continue "Creating system .desktop files...\n${localshare_desktop_file}\n${home_desktop_file}"
+    if [ "$create_localshare_file" = "true" ] || [ "$create_home_file" = "true" ]; then
+        debug_print continue "Creating missing system .desktop files (if needed)..."
 
         # Copy the new desktop file to ~/.local/share/applications
-        mkdir -p "${data_dir}/applications"
-        cp "$prefix_desktop_file" "$localshare_desktop_file"
+        if [ "$create_localshare_file" = "true" ]; then
+            mkdir -p "${data_dir}/applications"
+            cp "$prefix_desktop_file" "$localshare_desktop_file"
+        fi
+
         # Copy the new desktop file to the user's desktop directory
-        if [ -d "$(dirname "$home_desktop_file")" ]; then
-            cp "$prefix_desktop_file" "$home_desktop_file"
+        if [ "$create_home_file" = "true" ]; then
+            if [ -d "$(dirname "$home_desktop_file")" ]; then
+                cp "$prefix_desktop_file" "$home_desktop_file"
+            fi
         fi
 
         # Update the .desktop file database if the command is available
@@ -4778,11 +5020,11 @@ Icon=bms-launcher" > "$prefix_desktop_file"
         fi
 
         # Check if the desktop files were created successfully
-        if [ ! -f "$home_desktop_file" ]; then
+        if [ "$create_home_file" = "true" ] && [ ! -f "$home_desktop_file" ]; then
             # Desktop file couldn't be created
             message warning "Warning: The .desktop file could not be created!\n\n${home_desktop_file}"
         fi
-        if [ ! -f "$localshare_desktop_file" ]; then
+        if [ "$create_localshare_file" = "true" ] && [ ! -f "$localshare_desktop_file" ]; then
             # Desktop file couldn't be created
             message warning "Warning: The .desktop file could not be created!\n\n${localshare_desktop_file}"
         fi
@@ -4957,6 +5199,166 @@ download_protontricks() {
     return 0
 }
 
+# MARK: detect_steam_falcon4_install()
+# Detect Falcon 4.0 in known Steam default locations
+detect_steam_falcon4_install() {
+    steam_falcon4_dir=""
+    local candidates=(
+        "$HOME/.steam/steam/steamapps/common/Falcon 4.0"
+        "$HOME/.steam/root/steamapps/common/Falcon 4.0"
+        "$HOME/.local/share/Steam/steamapps/common/Falcon 4.0"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/Falcon 4.0"
+    )
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [ -d "$candidate" ] && [ -f "$candidate/falcon4.exe" ]; then
+            steam_falcon4_dir="$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# MARK: select_steam_falcon4_install()
+# Ask the user to select their Steam Falcon 4.0 folder and validate falcon4.exe
+# Allows retrying so non-standard Steam library locations can be selected.
+select_steam_falcon4_install() {
+    local default_dir="$HOME/.steam/steam/steamapps/common/Falcon 4.0"
+    local selected_dir=""
+
+    while true; do
+        selected_dir=""
+
+        if [ "$use_zenity" -eq 1 ]; then
+            selected_dir="$(zenity --file-selection --directory --title="Select Steam Falcon 4.0 directory" --filename="$default_dir/" 2>/dev/null)"
+            if [ -z "$selected_dir" ]; then
+                if message question "No directory was selected. Would you like to try again?"; then
+                    continue
+                fi
+                message error "No Steam Falcon 4.0 directory selected. Aborting installation."
+                return 1
+            fi
+        else
+            printf "Enter your Steam Falcon 4.0 directory\nExample: %s\n\n" "$default_dir"
+            read -rp "Directory path: " selected_dir
+            if [ -z "$selected_dir" ]; then
+                if message question "No directory was provided. Would you like to try again?"; then
+                    continue
+                fi
+                message error "No Steam Falcon 4.0 directory provided. Aborting installation."
+                return 1
+            fi
+        fi
+
+        if [ -d "$selected_dir" ] && [ -f "$selected_dir/falcon4.exe" ]; then
+            steam_falcon4_dir="$selected_dir"
+            return 0
+        fi
+
+        if ! message question "Invalid Steam Falcon 4.0 directory. Expected to find falcon4.exe in:\n$selected_dir\n\nWould you like to choose another folder?"; then
+            message error "Invalid Steam Falcon 4.0 directory. Installation cancelled."
+            return 1
+        fi
+    done
+}
+
+# MARK: choose_falcon4_source()
+# Ask user whether Falcon 4.0 should come from Steam; fallback to GOG by default
+choose_falcon4_source() {
+    if [ "$bms_mode" = "internal" ]; then
+        falcon4_source="none"
+        steam_falcon4_dir=""
+        return 0
+    fi
+
+    falcon4_source="gog"
+    steam_falcon4_dir=""
+
+    if message question "Do you have Falcon 4.0 installed from Steam?\n\nSelect 'No' to use the default GOG installer flow."; then
+        falcon4_source="steam"
+        if detect_steam_falcon4_install; then
+            message info "Steam Falcon 4.0 detected at:\n$steam_falcon4_dir"
+            return 0
+        fi
+
+        message warning "Steam Falcon 4.0 was not found in default locations.\nPlease select your Falcon 4.0 folder manually."
+        if ! select_steam_falcon4_install; then
+            return 1
+        fi
+    else
+        falcon4_source="gog"
+    fi
+
+    return 0
+}
+
+# MARK: apply_falcon4_registry_key()
+# Import Falcon 4.0 registry keys into the current prefix without external files
+apply_falcon4_registry_key() {
+    if [ -z "$WINEPREFIX" ] || [ ! -d "$WINEPREFIX/drive_c" ]; then
+        message error "Unable to apply Falcon 4.0 registry key: Wine prefix is not ready."
+        return 1
+    fi
+
+    local wine_bin="${1:-wine}"
+
+    local falcon4_reg_file="$WINEPREFIX/drive_c/falcon_4.reg"
+    cat > "$falcon4_reg_file" << 'EOF'
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\Software\MicroProse]
+
+[HKEY_LOCAL_MACHINE\Software\MicroProse\Falcon]
+
+[HKEY_LOCAL_MACHINE\Software\MicroProse\Falcon\4.0]
+"baseDir"="C:\\Falcon 4.0"
+"misctexDir"="C:\\Falcon 4.0\\terrdata\\misctex"
+"movieDir"="C:\\Falcon 4.0"
+"objectDir"="C:\\Falcon 4.0\\terrdata\\objects"
+"theaterDir"="C:\\Falcon 4.0\\terrdata\\korea"
+
+[HKEY_LOCAL_MACHINE\Software\MicroProse\Falcon\4.0\MPR]
+"MPRDetect3Dx"=dword:00000001
+"MPRDetectCPU"=dword:00000001
+"MPRDetectMMX"=dword:00000001
+"MPRDetectXMM"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\MicroProse]
+
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\MicroProse\Falcon]
+
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\MicroProse\Falcon\4.0]
+"baseDir"="C:\\Falcon 4.0"
+"misctexDir"="C:\\Falcon 4.0\\terrdata\\misctex"
+"movieDir"="C:\\Falcon 4.0"
+"objectDir"="C:\\Falcon 4.0\\terrdata\\objects"
+"theaterDir"="C:\\Falcon 4.0\\terrdata\\korea"
+
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\MicroProse\Falcon\4.0\MPR]
+"MPRDetect3Dx"=dword:00000001
+"MPRDetectCPU"=dword:00000001
+"MPRDetectMMX"=dword:00000001
+"MPRDetectXMM"=dword:00000001
+EOF
+
+    "$wine_bin" regedit /S "C:\\falcon_4.reg"
+    local reg_exit_code="$?"
+
+    if [ "$reg_exit_code" -eq 0 ]; then
+        "$wine_bin" reg query 'HKEY_LOCAL_MACHINE\Software\MicroProse\Falcon\4.0' /v baseDir >/dev/null 2>&1
+        reg_exit_code="$?"
+    fi
+
+    rm -f "$falcon4_reg_file" 2>/dev/null || true
+
+    if [ "$reg_exit_code" -ne 0 ]; then
+        message error "Failed to apply Falcon 4.0 registry keys."
+        return 1
+    fi
+
+    return 0
+}
+
 # MARK: download_gog_installer()
 # Opens browser for GOG download, waits for the installer to appear in Downloads, then runs it
 download_gog_installer() {
@@ -5058,6 +5460,11 @@ download_bms_installer() {
                 fi
                 # Trim whitespace
                 bms_key="$(echo "$bms_key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+                if [ -z "$bms_key" ]; then
+                    message error "Internal installer key is required for internal Falcon BMS installs."
+                    cleanup_conf_if_only_firstrun
+                    return 1
+                fi
             fi
             return 0
         else
@@ -5144,6 +5551,11 @@ download_bms_installer() {
             read -r bms_key
         fi
         bms_key="$(echo "$bms_key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        if [ -z "$bms_key" ]; then
+            message error "Internal installer key is required for internal Falcon BMS installs."
+            cleanup_conf_if_only_firstrun
+            return 1
+        fi
     fi
     # Don't show a popup on successful selection to reduce interruptions
     debug_print continue "Falcon BMS installer selected: $selected_bms_installer (use_16k_tiles=$use_16k_tiles bms_key=$bms_key)"
