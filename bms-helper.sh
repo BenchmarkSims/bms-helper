@@ -4679,6 +4679,32 @@ install_game() {
     #export WINESERVER="$wine_path/wineserver"
     export WINEPREFIX="$install_dir"
 
+    install_wine_bin="$(command -v wine 2>/dev/null || true)"
+    install_wineserver_bin="$(command -v wineserver 2>/dev/null || true)"
+    if [ -f "$install_dir/current_runner" ]; then
+        install_runner_dir="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
+        if [ -n "$install_runner_dir" ] && [ -x "$install_runner_dir/files/bin/wine" ]; then
+            install_wine_bin="$install_runner_dir/files/bin/wine"
+            install_wineserver_bin="$install_runner_dir/files/bin/wineserver"
+        elif [ -n "$install_runner_dir" ] && [ -x "$install_runner_dir/bin/wine" ]; then
+            install_wine_bin="$install_runner_dir/bin/wine"
+            install_wineserver_bin="$install_runner_dir/bin/wineserver"
+        elif [ -n "$install_runner_dir" ] && [ -x "$install_runner_dir/wine" ]; then
+            install_wine_bin="$install_runner_dir/wine"
+            install_wineserver_bin="$install_runner_dir/wineserver"
+        fi
+    fi
+
+    if [ -z "$install_wine_bin" ] || [ ! -x "$install_wine_bin" ]; then
+        message error "No usable Wine binary was found for installation."
+        cleanup_conf_if_only_firstrun
+        return 1
+    fi
+
+    if [ -z "$install_wineserver_bin" ] || [ ! -x "$install_wineserver_bin" ]; then
+        install_wineserver_bin=""
+    fi
+
     # Timeouts for long-running install stages (override via environment if needed).
     prefix_setup_timeout_seconds="${BMS_PREFIX_SETUP_TIMEOUT_SECONDS:-5400}"
     installer_timeout_seconds="${BMS_INSTALLER_TIMEOUT_SECONDS:-7200}"
@@ -4707,7 +4733,9 @@ install_game() {
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 126 ] || [ "$exit_code" -eq 124 ]; then
         # 126 = permission denied (ie. noexec on /tmp)
-        wineserver -k # Kill all wine processes
+        if [ -n "$install_wineserver_bin" ]; then
+            "$install_wineserver_bin" -k
+        fi
         progress_bar stop # Stop the zenity progress window
         if [ "$exit_code" -eq 124 ]; then
             message warning "Wine prefix preparation timed out after ${prefix_setup_timeout_seconds} seconds.\n\nThe install log was written to\n$tmp_install_log\n\nThis usually means a hidden installer dialog blocked automation."
@@ -4721,7 +4749,7 @@ install_game() {
     fi
 
     # Add registry key that prevents wine from creating unnecessary file type associations
-    wine reg add "HKEY_CURRENT_USER\Software\Wine\FileOpenAssociations" /v Enable /d N /f >>"$tmp_install_log" 2>&1
+    "$install_wine_bin" reg add "HKEY_CURRENT_USER\Software\Wine\FileOpenAssociations" /v Enable /d N /f >>"$tmp_install_log" 2>&1
 
     # Fix oversized fonts in the WPF / MahApps.Metro .NET Launcher
     progress_update "Applying display scaling and font fixes..."
@@ -4729,7 +4757,7 @@ install_game() {
     curl -sL "https://github.com/mrbvrz/segoe-ui-linux/archive/refs/heads/master.tar.gz" | tar -xz -C "$tmp_dir"
     cp "$tmp_dir"/segoe-ui-linux-master/font/*.ttf "$install_dir/drive_c/windows/Fonts/" 2>/dev/null || true
     
-    wine reg add "HKEY_CURRENT_USER\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 96 /f >>"$tmp_install_log" 2>&1
+    "$install_wine_bin" reg add "HKEY_CURRENT_USER\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 96 /f >>"$tmp_install_log" 2>&1
 
 
     if [ "$falcon4_source" = "steam" ]; then
@@ -4742,7 +4770,9 @@ install_game() {
         cp -a "$steam_falcon4_dir"/. "$steam_target_dir"/ >>"$tmp_install_log" 2>&1
         copy_exit_code="$?"
         if [ "$copy_exit_code" -ne 0 ] || [ ! -f "$steam_target_dir/falcon4.exe" ]; then
-            wineserver -k
+            if [ -n "$install_wineserver_bin" ]; then
+                "$install_wineserver_bin" -k
+            fi
             progress_bar stop
             message error "Failed to copy Steam Falcon 4.0 files into the Wine prefix.\nThe install log was written to\n$tmp_install_log"
             cleanup_conf_if_only_firstrun
@@ -4750,9 +4780,11 @@ install_game() {
         fi
 
         progress_update "Applying Falcon 4.0 registry keys..."
-        apply_falcon4_registry_key >>"$tmp_install_log" 2>&1
+        apply_falcon4_registry_key "$install_wine_bin" >>"$tmp_install_log" 2>&1
         if [ "$?" -ne 0 ]; then
-            wineserver -k
+            if [ -n "$install_wineserver_bin" ]; then
+                "$install_wineserver_bin" -k
+            fi
             progress_bar stop
             message error "Falcon 4.0 registry initialization failed.\nThe install log was written to\n$tmp_install_log"
             cleanup_conf_if_only_firstrun
@@ -4763,9 +4795,9 @@ install_game() {
         debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
         progress_update "Running Falcon 4.0 GoG installer..."
         if [ -n "$selected_gog_installer" ]; then
-            wine "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+            "$install_wine_bin" "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
         else
-            wine "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+            "$install_wine_bin" "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
         fi
     else
         debug_print continue "Internal mode selected: skipping Falcon 4.0 install/source requirements."
@@ -4776,7 +4808,9 @@ install_game() {
     progress_update "Running Falcon BMS installer..."
     # Build installer arguments suitable for the selected release type.
     if ! build_bms_installer_args; then
-        wineserver -k
+        if [ -n "$install_wineserver_bin" ]; then
+            "$install_wineserver_bin" -k
+        fi
         progress_bar stop
         cleanup_conf_if_only_firstrun
         return 1
@@ -4785,15 +4819,17 @@ install_game() {
     debug_print continue "Falcon BMS selected arguments: ${installer_args[*]}"
 
     if [ -n "$selected_bms_installer" ]; then
-        run_bms_installer_command "wine" "$installer_timeout_seconds" "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
+        run_bms_installer_command "$install_wine_bin" "$installer_timeout_seconds" "$selected_bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
     else
-        run_bms_installer_command "wine" "$installer_timeout_seconds" "$SCRIPT_DIR/$bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
+        run_bms_installer_command "$install_wine_bin" "$installer_timeout_seconds" "$SCRIPT_DIR/$bms_installer" "${installer_args[@]}" >>"$tmp_install_log" 2>&1
     fi
 
     exit_code="$?"
     if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 58 ] || [ "$exit_code" -eq 124 ]; then
         # User cancelled or there was an error
-        wineserver -k # Kill all wine processes
+        if [ -n "$install_wineserver_bin" ]; then
+            "$install_wineserver_bin" -k
+        fi
         progress_bar stop # Stop the zenity progress window
         if [ "$exit_code" -eq 124 ]; then
             message warning "Falcon BMS installer timed out after ${installer_timeout_seconds} seconds.\n\nThe install log was written to\n$tmp_install_log"
@@ -4810,7 +4846,9 @@ install_game() {
     progress_bar stop
 
     # Kill the wine process after installation
-    wineserver -k
+    if [ -n "$install_wineserver_bin" ]; then
+        "$install_wineserver_bin" -k
+    fi
 
     # Save the install location to the Helper's config files
     reset_helper "switchprefix"
@@ -5262,47 +5300,55 @@ apply_falcon4_registry_key() {
         return 1
     fi
 
+    local wine_bin="${1:-wine}"
+
     local falcon4_reg_file="$WINEPREFIX/drive_c/falcon_4.reg"
     cat > "$falcon4_reg_file" << 'EOF'
 Windows Registry Editor Version 5.00
 
-[HKEY_LOCAL_MACHINE\\Software\\MicroProse]
+[HKEY_LOCAL_MACHINE\Software\MicroProse]
 
-[HKEY_LOCAL_MACHINE\\Software\\MicroProse\\Falcon]
+[HKEY_LOCAL_MACHINE\Software\MicroProse\Falcon]
 
-[HKEY_LOCAL_MACHINE\\Software\\MicroProse\\Falcon\\4.0]
+[HKEY_LOCAL_MACHINE\Software\MicroProse\Falcon\4.0]
 "baseDir"="C:\\Falcon 4.0"
 "misctexDir"="C:\\Falcon 4.0\\terrdata\\misctex"
 "movieDir"="C:\\Falcon 4.0"
 "objectDir"="C:\\Falcon 4.0\\terrdata\\objects"
 "theaterDir"="C:\\Falcon 4.0\\terrdata\\korea"
 
-[HKEY_LOCAL_MACHINE\\Software\\MicroProse\\Falcon\\4.0\\MPR]
+[HKEY_LOCAL_MACHINE\Software\MicroProse\Falcon\4.0\MPR]
 "MPRDetect3Dx"=dword:00000001
 "MPRDetectCPU"=dword:00000001
 "MPRDetectMMX"=dword:00000001
 "MPRDetectXMM"=dword:00000001
 
-[HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse]
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\MicroProse]
 
-[HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse\\Falcon]
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\MicroProse\Falcon]
 
-[HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse\\Falcon\\4.0]
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\MicroProse\Falcon\4.0]
 "baseDir"="C:\\Falcon 4.0"
 "misctexDir"="C:\\Falcon 4.0\\terrdata\\misctex"
 "movieDir"="C:\\Falcon 4.0"
 "objectDir"="C:\\Falcon 4.0\\terrdata\\objects"
 "theaterDir"="C:\\Falcon 4.0\\terrdata\\korea"
 
-[HKEY_LOCAL_MACHINE\\Software\\Wow6432Node\\MicroProse\\Falcon\\4.0\\MPR]
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\MicroProse\Falcon\4.0\MPR]
 "MPRDetect3Dx"=dword:00000001
 "MPRDetectCPU"=dword:00000001
 "MPRDetectMMX"=dword:00000001
 "MPRDetectXMM"=dword:00000001
 EOF
 
-    wine regedit /S "C:\\falcon_4.reg"
+    "$wine_bin" regedit /S "C:\\falcon_4.reg"
     local reg_exit_code="$?"
+
+    if [ "$reg_exit_code" -eq 0 ]; then
+        "$wine_bin" reg query 'HKEY_LOCAL_MACHINE\Software\MicroProse\Falcon\4.0' /v baseDir >/dev/null 2>&1
+        reg_exit_code="$?"
+    fi
+
     rm -f "$falcon4_reg_file" 2>/dev/null || true
 
     if [ "$reg_exit_code" -ne 0 ]; then
