@@ -4674,10 +4674,21 @@ install_game() {
     tmp_install_log="$(mktemp --suffix=".log" -t "bmshelper-install-XXX")"
     debug_print continue "Installation log file created at $tmp_install_log"
 
+    {
+        echo "=== Falcon BMS install diagnostic log ==="
+        echo "timestamp: $(date -Iseconds)"
+        echo "install_dir: $install_dir"
+        echo "falcon4_source: $falcon4_source"
+        echo "selected_gog_installer: ${selected_gog_installer:-<default>}"
+        echo "selected_bms_installer: ${selected_bms_installer:-<default>}"
+        echo ""
+    } >>"$tmp_install_log"
+
     # Configure the wine prefix environment
     #export WINE="$wine_path/wine"
     #export WINESERVER="$wine_path/wineserver"
     export WINEPREFIX="$install_dir"
+    export WINEDLLOVERRIDES=""
 
     install_wine_bin="$(command -v wine 2>/dev/null || true)"
     install_wineserver_bin="$(command -v wineserver 2>/dev/null || true)"
@@ -4705,6 +4716,14 @@ install_game() {
         install_wineserver_bin=""
     fi
 
+    # Keep protontricks and installer invocations on the same runner.
+    export WINE="$install_wine_bin"
+    if [ -n "$install_wineserver_bin" ]; then
+        export WINESERVER="$install_wineserver_bin"
+    else
+        unset WINESERVER
+    fi
+
     # Timeouts for long-running install stages (override via environment if needed).
     prefix_setup_timeout_seconds="${BMS_PREFIX_SETUP_TIMEOUT_SECONDS:-5400}"
     installer_timeout_seconds="${BMS_INSTALLER_TIMEOUT_SECONDS:-7200}"
@@ -4717,17 +4736,44 @@ install_game() {
     progress_update "Installing required components into the Wine prefix..."
     debug_print continue "Installing required components into the Wine prefix. Please wait; this will take a moment..."
 
-    # Let the game installer handle .NET 4.8.1 by default.
-    # Set BMS_PREINSTALL_DOTNET48=1 only if you explicitly want helper-side dotnet48 preinstall.
+    # Default behavior for GoG installs matches historical flow: preinstall dotnet48.
+    # You can override explicitly with BMS_PREINSTALL_DOTNET48=0 or =1.
     prefix_components=(corefonts tahoma lucida verdana dxvk powershell win11)
-    if [ "${BMS_PREINSTALL_DOTNET48:-0}" = "1" ]; then
+    preinstall_dotnet48="${BMS_PREINSTALL_DOTNET48:-}"
+    if [ "$preinstall_dotnet48" = "1" ] || { [ -z "$preinstall_dotnet48" ] && [ "$falcon4_source" = "gog" ]; }; then
         prefix_components+=(dotnet48)
     fi
 
-    if [ -x "$(command -v timeout)" ] && [ -n "$prefix_setup_timeout_seconds" ]; then
-        timeout --foreground "$prefix_setup_timeout_seconds" "$protontricks_bin" -q "${prefix_components[@]}" >"$tmp_install_log" 2>&1
+    winetricks_bin="$(command -v winetricks 2>/dev/null || true)"
+    protontricks_appid="${BMS_PROTONTRICKS_APPID:-${STEAM_APPID:-}}"
+    setup_tool_name=""
+
+    if [ -n "$protontricks_appid" ]; then
+        setup_tool_name="protontricks"
+        prefix_setup_cmd=("$protontricks_bin" "$protontricks_appid" -q "${prefix_components[@]}")
+    elif [ -n "$winetricks_bin" ] && [ -x "$winetricks_bin" ]; then
+        setup_tool_name="winetricks"
+        prefix_setup_cmd=("$winetricks_bin" -q "${prefix_components[@]}")
     else
-        "$protontricks_bin" -q "${prefix_components[@]}" >"$tmp_install_log" 2>&1
+        setup_tool_name="protontricks"
+        prefix_setup_cmd=("$protontricks_bin" -q "${prefix_components[@]}")
+    fi
+
+    debug_print continue "Prefix setup tool: ${setup_tool_name}"
+    debug_print continue "Prefix setup command: $(printf '%q ' "${prefix_setup_cmd[@]}")"
+    {
+        echo "=== Stage: prefix_setup ==="
+        echo "WINEPREFIX=$WINEPREFIX"
+        echo "WINE=$WINE"
+        echo "WINESERVER=${WINESERVER:-<unset>}"
+        echo "tool=$setup_tool_name"
+        echo "command=$(printf '%q ' "${prefix_setup_cmd[@]}")"
+    } >>"$tmp_install_log"
+
+    if [ -x "$(command -v timeout)" ] && [ -n "$prefix_setup_timeout_seconds" ]; then
+        timeout --foreground "$prefix_setup_timeout_seconds" "${prefix_setup_cmd[@]}" >>"$tmp_install_log" 2>&1
+    else
+        "${prefix_setup_cmd[@]}" >>"$tmp_install_log" 2>&1
     fi
 
     exit_code="$?"
@@ -4746,6 +4792,31 @@ install_game() {
         fi
         cleanup_conf_if_only_firstrun
         return 1
+    fi
+
+    install_default_pfx_dir=""
+    if [ -n "${install_runner_dir:-}" ] && [ -d "$install_runner_dir/files/share/default_pfx/drive_c/windows" ]; then
+        install_default_pfx_dir="$install_runner_dir/files/share/default_pfx/drive_c/windows"
+    fi
+
+    if [ -n "$install_default_pfx_dir" ]; then
+        debug_print continue "Seeding Proton runtime DLLs from $install_default_pfx_dir into the prefix..."
+        {
+            echo "=== Stage: proton_prefix_seed ==="
+            echo "default_pfx_dir=$install_default_pfx_dir"
+        } >>"$tmp_install_log"
+
+        for dll_dir in system32 syswow64; do
+            if [ ! -d "$install_dir/drive_c/windows/$dll_dir" ] || [ ! -d "$install_default_pfx_dir/$dll_dir" ]; then
+                continue
+            fi
+
+            for dll_name in libvkd3d-1.dll libvkd3d-shader-1.dll; do
+                if [ ! -f "$install_dir/drive_c/windows/$dll_dir/$dll_name" ] && [ -f "$install_default_pfx_dir/$dll_dir/$dll_name" ]; then
+                    cp -f "$install_default_pfx_dir/$dll_dir/$dll_name" "$install_dir/drive_c/windows/$dll_dir/$dll_name" >>"$tmp_install_log" 2>&1
+                fi
+            done
+        done
     fi
 
     # Add registry key that prevents wine from creating unnecessary file type associations
@@ -4794,10 +4865,32 @@ install_game() {
         # Run the Falcon 4.0 GoG installer
         debug_print continue "Installing Falcon 4.0. Please wait; this will take a moment..."
         progress_update "Running Falcon 4.0 GoG installer..."
+        {
+            echo "=== Stage: gog_install ==="
+            echo "WINE=$install_wine_bin"
+            echo "WINESERVER=${install_wineserver_bin:-<unset>}"
+        } >>"$tmp_install_log"
         if [ -n "$selected_gog_installer" ]; then
             "$install_wine_bin" "$selected_gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
         else
             "$install_wine_bin" "$SCRIPT_DIR/$gog_installer" /VERYSILENT /NOICONS >>"$tmp_install_log" 2>&1
+        fi
+
+        gog_exit_code="$?"
+        if [ "$gog_exit_code" -ne 0 ] || grep -Eiq "Cannot Imprt dll|Cannot Import dll|get_hw_caps\.dll" "$tmp_install_log"; then
+            if [ -n "$install_wineserver_bin" ]; then
+                "$install_wineserver_bin" -k
+            fi
+            progress_bar stop
+            gog_diag_log="$(mktemp --suffix=".log" -t "bmshelper-gog-fail-XXX")"
+            tail -n 120 "$tmp_install_log" >"$gog_diag_log" 2>/dev/null || cp "$tmp_install_log" "$gog_diag_log"
+            if grep -Eiq "Cannot Imprt dll|Cannot Import dll|get_hw_caps\.dll" "$tmp_install_log"; then
+                message error "Falcon 4.0 GoG installer failed during DLL import initialization (get_hw_caps.dll signature detected).\n\nMain install log:\n$tmp_install_log\n\nTail diagnostic log:\n$gog_diag_log\n\nThis usually points to a runtime mismatch or broken prefix runtime state."
+            else
+                message error "Falcon 4.0 GoG installer failed with exit code: $gog_exit_code\n\nMain install log:\n$tmp_install_log\n\nTail diagnostic log:\n$gog_diag_log"
+            fi
+            cleanup_conf_if_only_firstrun
+            return 1
         fi
     else
         debug_print continue "Internal mode selected: skipping Falcon 4.0 install/source requirements."
