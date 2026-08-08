@@ -1408,7 +1408,7 @@ monitor_mfd_joystick_lifecycle() {
             # Poll every 5 seconds for either the game or alternative launcher process.
             sleep 5
 
-            if pgrep -fi 'Falcon BMS\.exe|FalconBMS_Alternative_Launcher\.exe' >/dev/null 2>&1; then
+            if pgrep -fi 'Falcon BMS\.exe|FalconBMS_Alternative_Launcher\.exe|FalconBMS\.Launcher\.exe' >/dev/null 2>&1; then
                 continue
             fi
 
@@ -1707,7 +1707,7 @@ launch_opentrack_after_falcon_start() {
 
         attempts=0
         while [ "\$attempts" -lt 30 ]; do
-            if pgrep -fi 'Falcon BMS\.exe|FalconBMS_Alternative_Launcher\.exe' >/dev/null 2>&1; then
+            if pgrep -fi 'Falcon BMS\.exe|FalconBMS_Alternative_Launcher\.exe|FalconBMS\.Launcher\.exe' >/dev/null 2>&1; then
                 if [ "\$opentrack_delay" -gt 0 ]; then
                     echo "opentrack=waiting delay=\${opentrack_delay}s reason=falcon_process_detected" >> "\$launch_log"
                     sleep "\$opentrack_delay"
