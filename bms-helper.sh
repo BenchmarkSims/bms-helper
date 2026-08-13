@@ -144,8 +144,8 @@ refresh_desktop_execs() {
 
     # Fallback: try to read proton_path from the saved launch script in the prefix
     if [ -z "$proton_candidate" ] && [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
-        if [ -n "$wine_launch_script_name" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
-            launch_script="$wine_prefix/$wine_launch_script_name"
+        if [ -n "$bms_launcher_name" ] && [ -f "$wine_prefix/$bms_launcher_name" ]; then
+            launch_script="$wine_prefix/$bms_launcher_name"
         else
             for f in "$wine_prefix"/*; do
                 if [ -f "$f" ] && grep -q -e '^export proton_path=' -e '^proton_path=' "$f" 2>/dev/null; then
@@ -172,7 +172,7 @@ refresh_desktop_execs() {
     fi
 
     # Desktop entries now launch through the generated prefix script
-    exec_line="Exec=\"$install_dir/$wine_launch_script_name\""
+    exec_line="Exec=\"$install_dir/$bms_launcher_name\""
 
     # Replace Exec lines in any existing desktop files to use exec_line
     for f in "$localshare_desktop_file" "$home_desktop_file" "$prefix_desktop_file"; do
@@ -181,7 +181,7 @@ refresh_desktop_execs() {
         fi
     done
 
-    debug_print continue "Refreshed desktop Exec lines to use launch script: $install_dir/$wine_launch_script_name"
+    debug_print continue "Refreshed desktop Exec lines to use launch script: $install_dir/$bms_launcher_name"
     return 0
 }
 
@@ -245,7 +245,7 @@ helper_dir="$(realpath "$0" | xargs -0 dirname)"
 # Bump bms_launcher_version whenever create_or_update_launch_script's
 # generated content changes in a way that existing installs must pick up
 # (e.g. the checkinstall exit-code contract) -- this forces update_launch_script.
-wine_launch_script_name="bms-launcher.sh"
+bms_launcher_name="bms-launcher.sh"
 bms_launcher_version="1.22"
 
 # Temporary directory
@@ -1049,8 +1049,8 @@ get_current_runner() {
 
     # Fallback: inspect launch scripts in the prefix for proton_path or wine_path
     if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
-        if [ -n "$wine_launch_script_name" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
-            launch_script="$wine_prefix/$wine_launch_script_name"
+        if [ -n "$bms_launcher_name" ] && [ -f "$wine_prefix/$bms_launcher_name" ]; then
+            launch_script="$wine_prefix/$bms_launcher_name"
         else
             for f in "$wine_prefix"/*; do
                 if [ -f "$f" ] && (grep -q -e '^export proton_path=' -e '^proton_path=' "$f" 2>/dev/null || grep -q -e '^export wine_path=' -e '^wine_path=' "$f" 2>/dev/null); then
@@ -1267,8 +1267,8 @@ create_or_update_launch_script() {
     if [ -f "$install_dir/current_runner" ]; then
         runner_dir="$(sed -n '1p' "$install_dir/current_runner" | tr -d '\r')"
     fi
-    if [ -z "$runner_dir" ] && [ -f "$install_dir/$wine_launch_script_name" ]; then
-        runner_dir="$(grep -e '^export proton_path=' -e '^proton_path=' "$install_dir/$wine_launch_script_name" | awk -F '=' '{print $2}' | tr -d '\"')"
+    if [ -z "$runner_dir" ] && [ -f "$install_dir/$bms_launcher_name" ]; then
+        runner_dir="$(grep -e '^export proton_path=' -e '^proton_path=' "$install_dir/$bms_launcher_name" | awk -F '=' '{print $2}' | tr -d '\"')"
     fi
 
     # Derive proton_path/wine_path. wine_path is Proton's own bundled wine,
@@ -1294,7 +1294,7 @@ create_or_update_launch_script() {
     # setup, so regular launches don't pay for vulkaninfo/proton-run every time.
     setup_openxr_registry "$install_dir" "$proton_path"
 
-    launch_script_path="$install_dir/$wine_launch_script_name"
+    launch_script_path="$install_dir/$bms_launcher_name"
     cat > "$launch_script_path" <<EOF
 #!/usr/bin/env bash
 
@@ -3333,9 +3333,9 @@ post_download() {
 
         # Handle installs and deletions for Proton-style runners
         if [ "$post_download_required" = "installed" ] && { [ "$download_type" = "runner" ] || [ "$download_type" = "proton" ]; }; then
-            debug_print continue "Updating \"${post_download_sed_string}\" variable in launch script ${wine_prefix}/${wine_launch_script_name}..."
+            debug_print continue "Updating \"${post_download_sed_string}\" variable in launch script ${wine_prefix}/${bms_launcher_name}..."
             # Point proton_path at the installed runner directory
-            sed -i "s|^${post_download_sed_string}.*|${post_download_sed_string}\"${wine_prefix}/runners/${downloaded_item_name}\"|" "$wine_prefix/$wine_launch_script_name"
+            sed -i "s|^${post_download_sed_string}.*|${post_download_sed_string}\"${wine_prefix}/runners/${downloaded_item_name}\"|" "$wine_prefix/$bms_launcher_name"
             message info "Proton Runner installation complete!"
             # Persist the selected runner in the install directory for stable detection
             install_dir="${install_dir:-$wine_prefix}"
@@ -3364,8 +3364,8 @@ post_download() {
             else
                 message info "The Proton runner currently used by your launch script has been deleted!\n\nYour launch script will be updated to use the default runner."
             fi
-            debug_print continue "Updating \"${post_download_sed_string}\" variable in launch script ${wine_prefix}/${wine_launch_script_name}..."
-            sed -i "s#^${post_download_sed_string}.*#${post_download_sed_string}\"${post_delete_restore_value}\"#" "$wine_prefix/$wine_launch_script_name"
+            debug_print continue "Updating \"${post_download_sed_string}\" variable in launch script ${wine_prefix}/${bms_launcher_name}..."
+            sed -i "s#^${post_download_sed_string}.*#${post_download_sed_string}\"${post_delete_restore_value}\"#" "$wine_prefix/$bms_launcher_name"
             message info "Your launch script has been updated!"
             # Update persisted current runner to the restore value
             install_dir="${install_dir:-$wine_prefix}"
@@ -3603,12 +3603,12 @@ update_launch_script() {
     install_dir="${wine_prefix}"
 
     # Backup old launcher if present
-    if [ -f "$wine_prefix/$wine_launch_script_name" ]; then
-        cp "$wine_prefix/$wine_launch_script_name" "$wine_prefix/$(basename "$wine_launch_script_name" .sh).bak"
+    if [ -f "$wine_prefix/$bms_launcher_name" ]; then
+        cp "$wine_prefix/$bms_launcher_name" "$wine_prefix/$(basename "$bms_launcher_name" .sh).bak"
     fi
 
     if ! create_or_update_launch_script; then
-        message error "Unable to generate the launch script.\n\n$wine_prefix/$wine_launch_script_name"
+        message error "Unable to generate the launch script.\n\n$wine_prefix/$bms_launcher_name"
         return 1
     fi
 
@@ -3629,7 +3629,7 @@ update_launch_script() {
             ;;
     esac
 
-    message info "Your game launch script has been updated/repaired.\n\nPath:\n$wine_prefix/$wine_launch_script_name$helper_update_message"
+    message info "Your game launch script has been updated/repaired.\n\nPath:\n$wine_prefix/$bms_launcher_name$helper_update_message"
 }
 
 # MARK: run_installation_checks()
@@ -3699,16 +3699,16 @@ edit_launch_script() {
     fi
 
     # Make sure the launch script exists
-    if [ ! -f "$wine_prefix/$wine_launch_script_name" ]; then
-        message error "Unable to find $wine_prefix/$wine_launch_script_name"
+    if [ ! -f "$wine_prefix/$bms_launcher_name" ]; then
+        message error "Unable to find $wine_prefix/$bms_launcher_name"
         return 1
     fi
 
     # Open the launch script in the user's preferred editor
     if [ -x "$(command -v xdg-open)" ]; then
-        xdg-open "$wine_prefix/$wine_launch_script_name"
+        xdg-open "$wine_prefix/$bms_launcher_name"
     else
-        message error "xdg-open is not installed.\nYou may open the launch script manually:\n\n$wine_prefix/$wine_launch_script_name"
+        message error "xdg-open is not installed.\nYou may open the launch script manually:\n\n$wine_prefix/$bms_launcher_name"
     fi
 }
 
@@ -3735,13 +3735,13 @@ call_launch_script() {
     fi
 
     # Make sure the launch script exists
-    if [ ! -f "$wine_prefix/$wine_launch_script_name" ]; then
-        message error "Unable to find $wine_prefix/$wine_launch_script_name"
+    if [ ! -f "$wine_prefix/$bms_launcher_name" ]; then
+        message error "Unable to find $wine_prefix/$bms_launcher_name"
         return 1
     fi
 
     # Check if the launch script is the correct version
-    current_launcher_ver="$(grep "^# version:" "$wine_prefix/$wine_launch_script_name" | awk '{print $3}')"
+    current_launcher_ver="$(grep "^# version:" "$wine_prefix/$bms_launcher_name" | awk '{print $3}')"
     req_launcher_ver="$bms_launcher_version"
 
     if [ "$req_launcher_ver" != "$current_launcher_ver" ] &&
@@ -3751,7 +3751,7 @@ call_launch_script() {
     fi
 
     # Launch a wine shell using the launch script
-    "$wine_prefix/$wine_launch_script_name" "$launch_arg"
+    "$wine_prefix/$bms_launcher_name" "$launch_arg"
 }
 
 # MARK: launch_protontricks()
@@ -3771,8 +3771,8 @@ launch_protontricks() {
     fi
 
     # Fallback to launch script value when current_runner file is missing
-    if [ -z "$proton_runner" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
-        proton_runner="$(grep -e '^export proton_path=' -e '^proton_path=' "$wine_prefix/$wine_launch_script_name" | awk -F '=' '{print $2}' | tr -d '"')"
+    if [ -z "$proton_runner" ] && [ -f "$wine_prefix/$bms_launcher_name" ]; then
+        proton_runner="$(grep -e '^export proton_path=' -e '^proton_path=' "$wine_prefix/$bms_launcher_name" | awk -F '=' '{print $2}' | tr -d '"')"
         proton_runner="$(echo "$proton_runner" | sed -e 's/^ *"//' -e 's/" *$//' -e 's/^ *//; s/ *$//')"
     fi
 
@@ -4301,20 +4301,20 @@ install_async_dxvk() {
 
     
     # Make sure we can locate the launch script
-    if [ ! -f "$wine_prefix/$wine_launch_script_name" ]; then
+    if [ ! -f "$wine_prefix/$bms_launcher_name" ]; then
         progress_bar stop # Stop the zenity progress window
-        message warning "Unable to find launch script!\n$wine_prefix/$wine_launch_script_name\n\nTo enable async, set the environment variable: DXVK_ASYNC=1"
+        message warning "Unable to find launch script!\n$wine_prefix/$bms_launcher_name\n\nTo enable async, set the environment variable: DXVK_ASYNC=1"
         return 0
     fi
     # Check if the DXVK_ASYNC variable is commented out in the launch script
-    if ! grep -q "^#export DXVK_ASYNC=" "$wine_prefix/$wine_launch_script_name" && ! grep -q "^export DXVK_ASYNC=1" "$wine_prefix/$wine_launch_script_name"; then
+    if ! grep -q "^#export DXVK_ASYNC=" "$wine_prefix/$bms_launcher_name" && ! grep -q "^export DXVK_ASYNC=1" "$wine_prefix/$bms_launcher_name"; then
         progress_bar stop # Stop the zenity progress window
         if message question "Could not find the DXVK_ASYNC environment variable in your launch script! It may be out of date.\n\nWould you like to try updating your launch script?"; then
             # Try updating the launch script
             update_launch_script
 
             # Check if the update was successful and we now have the env var
-            if ! grep -q "^#export DXVK_ASYNC=" "$wine_prefix/$wine_launch_script_name"; then
+            if ! grep -q "^#export DXVK_ASYNC=" "$wine_prefix/$bms_launcher_name"; then
                 message warning "Could not find the DXVK_ASYNC environment variable in your launch script! The update may have failed.\n\nTo enable async, set the environment variable: DXVK_ASYNC=1"
                 return 0
             fi
@@ -4325,9 +4325,9 @@ install_async_dxvk() {
     fi
 
     # Modify the launch script to uncomment the DXVK_ASYNC variable unless it's already uncommented
-    if ! grep -q "^export DXVK_ASYNC=1" "$wine_prefix/$wine_launch_script_name"; then
-        debug_print continue "Updating DXVK_ASYNC env var in launch script ${wine_prefix}/${wine_launch_script_name}..."
-        sed -i "s|^#export DXVK_ASYNC=.*|export DXVK_ASYNC=1|" "$wine_prefix/$wine_launch_script_name"
+    if ! grep -q "^export DXVK_ASYNC=1" "$wine_prefix/$bms_launcher_name"; then
+        debug_print continue "Updating DXVK_ASYNC env var in launch script ${wine_prefix}/${bms_launcher_name}..."
+        sed -i "s|^#export DXVK_ASYNC=.*|export DXVK_ASYNC=1|" "$wine_prefix/$bms_launcher_name"
     fi
 
     progress_bar stop # Stop the zenity progress window
@@ -4837,9 +4837,9 @@ install_game() {
 
     # Generate or refresh the per-prefix launcher script
     if ! create_or_update_launch_script; then
-        message warning "Failed to generate launch script at $install_dir/$wine_launch_script_name"
+        message warning "Failed to generate launch script at $install_dir/$bms_launcher_name"
     fi
-    installed_launch_script="$install_dir/$wine_launch_script_name"
+    installed_launch_script="$install_dir/$bms_launcher_name"
 
     # Copy/refresh the bundled Falcon BMS icon in the local icon theme.
     if ! ensure_bms_icon_installed; then
@@ -4914,8 +4914,8 @@ create_desktop_files() {
     runner_exec="wine"
     launch_script=""
     if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
-        if [ -n "$wine_launch_script_name" ] && [ -f "$wine_prefix/$wine_launch_script_name" ]; then
-            launch_script="$wine_prefix/$wine_launch_script_name"
+        if [ -n "$bms_launcher_name" ] && [ -f "$wine_prefix/$bms_launcher_name" ]; then
+            launch_script="$wine_prefix/$bms_launcher_name"
         else
             for f in "$wine_prefix"/*; do
                 if [ -f "$f" ] && (grep -q -e '^export proton_path=' -e '^proton_path=' "$f" 2>/dev/null || grep -q -e '^export wine_path=' -e '^wine_path=' "$f" 2>/dev/null); then
@@ -4950,7 +4950,7 @@ create_desktop_files() {
     fi
 
     # Desktop entries now launch through the generated prefix script
-    exec_line="Exec=\"$install_dir/$wine_launch_script_name\""
+    exec_line="Exec=\"$install_dir/$bms_launcher_name\""
 
     echo "[Desktop Entry]
 Name=$bms_base_dir Launcher
