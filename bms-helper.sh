@@ -3468,17 +3468,15 @@ maintenance_menu() {
         config_msg="Open Wine prefix configuration"
         controllers_msg="Open Wine controller configuration"
         protontricks_msg="Launch Protontricks"
-        powershell_msg="Install PowerShell into Wine prefix"
-        opentrack_msg="Install OpenTrack for Windows"
         bms_launcher_msg="Update/Re-install Falcon BMS"
         dirs_msg="Display Helper and Falcon BMS directories"
         reset_msg="Reset Helper configs"
         quit_msg="Return to the main menu"
 
         # Set the options to be displayed in the menu
-        menu_options=("$prefix_msg" "$launcher_msg" "$checkinstall_msg" "$config_msg" "$controllers_msg" "$protontricks_msg" "$powershell_msg" "$opentrack_msg" "$dirs_msg" "$reset_msg" "$quit_msg")
+        menu_options=("$prefix_msg" "$launcher_msg" "$checkinstall_msg" "$config_msg" "$controllers_msg" "$protontricks_msg" "$dirs_msg" "$reset_msg" "$quit_msg")
         # Set the corresponding functions to be called for each of the options
-        menu_actions=("switch_prefix" "update_launch_script" "run_installation_checks" "call_launch_script config" "call_launch_script controllers" "launch_protontricks" "install_powershell" "install_opentrack_windows" "display_dirs" "reset_helper" "menu_loop_done")
+        menu_actions=("switch_prefix" "update_launch_script" "run_installation_checks" "call_launch_script config" "call_launch_script controllers" "launch_protontricks" "display_dirs" "reset_helper" "menu_loop_done")
 
         # Calculate the total height the menu should be
         # menu_option_height = pixels per menu option
@@ -3495,6 +3493,443 @@ maintenance_menu() {
     done
 }
 
+# MARK: manage_apps_menu()
+# Show options for installing/managing extra Windows applications in the prefix
+manage_apps_menu() {
+    # Loop the menu until the user selects quit
+    looping_menu="true"
+    while [ "$looping_menu" = "true" ]; do
+        # Configure the menu
+        menu_text_zenity="<b><big>Manage & Install other Apps</big>\n\nInstall or create shortcuts for extra Windows applications in your Falcon BMS Wine prefix</b>"
+        menu_text_terminal="Manage & Install other Apps\n\nInstall or create shortcuts for extra Windows applications in your Falcon BMS Wine prefix"
+        menu_text_height="300"
+        menu_type="radiolist"
+
+        # Configure the menu options
+        install_app_msg="Install a new application"
+        add_shortcut_msg="Add an application shortcut"
+        remove_shortcut_msg="Remove an application shortcut"
+        powershell_msg="Install PowerShell for Windows"
+        opentrack_msg="Install OpenTrack for Windows"
+        quit_msg="Return to the main menu"
+
+        # Set the options to be displayed in the menu
+        menu_options=("$install_app_msg" "$add_shortcut_msg" "$remove_shortcut_msg" "$powershell_msg" "$opentrack_msg" "$quit_msg")
+        # Set the corresponding functions to be called for each of the options
+        menu_actions=("install_new_application" "add_application_shortcut" "remove_shortcut_menu" "install_powershell" "install_opentrack_windows" "menu_loop_done")
+
+        # Calculate the total height the menu should be
+        # menu_option_height = pixels per menu option
+        # #menu_options[@] = number of menu options
+        # menu_text_height = height of the title/description text
+        # menu_text_height_zenity4 = added title/description height for libadwaita bigness
+        menu_height="$(($menu_option_height * ${#menu_options[@]} + $menu_text_height + $menu_text_height_zenity4))"
+
+        # Set the label for the cancel button
+        cancel_label="Go Back"
+
+        # Call the menu function.  It will use the options as configured above
+        menu
+    done
+}
+
+# MARK: resolve_wine_runner_bins()
+# Populate wine_bin/wineserver_bin from the configured Proton runner, falling
+# back to a host-installed wine. Requires getdirs/get_current_runner to have
+# already run (wine_prefix, launcher_winepath).
+resolve_wine_runner_bins() {
+    wine_bin=""
+    wineserver_bin=""
+    if [ -n "$launcher_winepath" ] && [ -x "$launcher_winepath/wine" ]; then
+        wine_bin="$launcher_winepath/wine"
+        if [ -x "$launcher_winepath/wineserver" ]; then
+            wineserver_bin="$launcher_winepath/wineserver"
+        fi
+    else
+        wine_bin="$(command -v wine 2>/dev/null || true)"
+        wineserver_bin="$(command -v wineserver 2>/dev/null || true)"
+    fi
+
+    if [ -z "$wine_bin" ] || [ ! -x "$wine_bin" ]; then
+        message error "Unable to locate a usable wine binary.\n\nConfigure a Proton runner first or install Wine on the host system."
+        return 1
+    fi
+
+    return 0
+}
+
+# MARK: install_new_application()
+# Let the user pick a Windows installer/executable and run it inside the
+# targeted Wine prefix, using the configured Proton runner (or host wine).
+install_new_application() {
+    getdirs
+    if [ "$?" -eq 1 ]; then
+        message warning "Unable to install a new application."
+        return 1
+    fi
+
+    get_current_runner
+    if ! resolve_wine_runner_bins; then
+        return 1
+    fi
+
+    # Ask the user to select the installer/executable to run
+    new_app_exe=""
+    while true; do
+        if [ "$use_zenity" -eq 1 ]; then
+            new_app_exe="$(zenity --file-selection --title="Select the application installer (.exe) to run" --filename="$HOME/Downloads/" 2>/dev/null)"
+        else
+            printf "Enter the full path to the application installer (.exe)\n\n"
+            read -rp "Installer path: " new_app_exe
+        fi
+
+        if [ -z "$new_app_exe" ]; then
+            if message question "No installer was selected. Would you like to try again?"; then
+                continue
+            fi
+            return 1
+        fi
+
+        if [ -f "$new_app_exe" ]; then
+            break
+        fi
+
+        if ! message question "The selected path does not exist:\n$new_app_exe\n\nWould you like to choose another file?"; then
+            return 1
+        fi
+    done
+
+    message info "The selected installer will now run inside the targeted Wine prefix:\n$wine_prefix\n\nIf Falcon BMS is currently running, close it first."
+
+    export WINEPREFIX="$wine_prefix"
+    export WINEDEBUG="${WINEDEBUG:--all}"
+    if [ -n "$wineserver_bin" ] && [ -x "$wineserver_bin" ]; then
+        export WINESERVER="$wineserver_bin"
+    fi
+
+    debug_print continue "Launching installer $new_app_exe in prefix ${wine_prefix} using ${wine_bin}..."
+    "$wine_bin" "$new_app_exe"
+    exit_code="$?"
+
+    if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 126 ] || [ "$exit_code" -eq 127 ] || [ "$exit_code" -eq 130 ]; then
+        message warning "The application installer exited with code $exit_code. See terminal output for details."
+        return 1
+    fi
+
+    message info "The application installer has finished running in prefix:\n$wine_prefix"
+    return 0
+}
+
+# MARK: extract_exe_icon()
+# Best-effort extraction of the largest embedded icon from a Windows .exe
+# into a PNG at $2, using icoutils (wrestool/icotool). Not a hard dependency:
+# nothing is written and the caller should fall back to a generic icon if
+# this returns non-zero. Return codes:
+#   0 = icon extracted successfully
+#   1 = icoutils is present but extraction failed (no icon resource, etc.)
+#   2 = icoutils (wrestool/icotool) is not installed
+extract_exe_icon() {
+    icon_exe_path="$1"
+    icon_dest_path="$2"
+
+    if [ -z "$(command -v wrestool 2>/dev/null)" ] || [ -z "$(command -v icotool 2>/dev/null)" ]; then
+        return 2
+    fi
+
+    icon_extract_dir="$(mktemp -d -p "$tmp_dir" icon-extract.XXXXXX)"
+    icon_ico_file="$icon_extract_dir/icon.ico"
+
+    # Type 14 = RT_GROUP_ICON: the icon group resource(s) embedded in the PE file
+    wrestool -x -t 14 "$icon_exe_path" > "$icon_ico_file" 2>/dev/null
+    if [ ! -s "$icon_ico_file" ]; then
+        return 1
+    fi
+
+    if ! icotool -x "$icon_ico_file" -o "$icon_extract_dir" 2>/dev/null; then
+        return 1
+    fi
+
+    # icotool names extracted frames "..._<width>x<height>x<depth>.png" -- pick
+    # the largest by parsed width, falling back to largest file size if the
+    # naming convention doesn't match.
+    icon_best_png=""
+    icon_best_width=0
+    for icon_png in "$icon_extract_dir"/*.png; do
+        [ -f "$icon_png" ] || continue
+        icon_png_width="$(echo "$icon_png" | sed -nE 's/.*_([0-9]+)x[0-9]+x[0-9]+\.png$/\1/p')"
+        if [ -n "$icon_png_width" ] && [ "$icon_png_width" -gt "$icon_best_width" ]; then
+            icon_best_width="$icon_png_width"
+            icon_best_png="$icon_png"
+        fi
+    done
+
+    if [ -z "$icon_best_png" ]; then
+        # Naming convention didn't match; fall back to the largest file by size
+        icon_best_png="$(ls -S "$icon_extract_dir"/*.png 2>/dev/null | head -n 1)"
+    fi
+
+    if [ -z "$icon_best_png" ] || [ ! -f "$icon_best_png" ]; then
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$icon_dest_path")"
+    cp "$icon_best_png" "$icon_dest_path"
+    return 0
+}
+
+# MARK: add_application_shortcut()
+# Create a desktop shortcut that launches an already-installed Windows
+# application through the configured Proton runner (or host wine), with the
+# correct WINEPREFIX/WINESERVER environment applied.
+add_application_shortcut() {
+    getdirs
+    if [ "$?" -eq 1 ]; then
+        message warning "Unable to add an application shortcut."
+        return 1
+    fi
+
+    get_current_runner
+    if ! resolve_wine_runner_bins; then
+        return 1
+    fi
+
+    # Ask the user to select the installed application's executable
+    shortcut_exe=""
+    while true; do
+        if [ "$use_zenity" -eq 1 ]; then
+            shortcut_exe="$(zenity --file-selection --title="Select the application executable for the shortcut" --filename="$wine_prefix/drive_c/" 2>/dev/null)"
+        else
+            printf "Enter the full path to the application's executable inside the prefix\n\n"
+            read -rp "Executable path: " shortcut_exe
+        fi
+
+        if [ -z "$shortcut_exe" ]; then
+            if message question "No executable was selected. Would you like to try again?"; then
+                continue
+            fi
+            return 1
+        fi
+
+        if [ -f "$shortcut_exe" ]; then
+            break
+        fi
+
+        if ! message question "The selected path does not exist:\n$shortcut_exe\n\nWould you like to choose another file?"; then
+            return 1
+        fi
+    done
+
+    # Default the shortcut's display name from the executable, tagging it
+    # with "(Internal)" in internal mode so it doesn't collide with (or get
+    # mistaken for) the same app's shortcut from a public-mode install.
+    default_shortcut_name="$(basename "$shortcut_exe")"
+    default_shortcut_name="${default_shortcut_name%.[eE][xX][eE]}"
+    if [ "$bms_mode" = "internal" ]; then
+        case "$default_shortcut_name" in
+            *" (Internal)") : ;;
+            *) default_shortcut_name="$default_shortcut_name (Internal)" ;;
+        esac
+    fi
+
+    # Ask for (or default) the shortcut's display name, retrying if the
+    # resulting shortcut name would overwrite an existing one
+    while true; do
+        shortcut_name="$default_shortcut_name"
+        if [ "$use_zenity" -eq 1 ]; then
+            entered_name="$(zenity --entry --title="Falcon BMS Linux Helper" --text="Enter a name for this application shortcut:" --entry-text="$shortcut_name" 2>/dev/null)"
+            if [ -n "$entered_name" ]; then
+                shortcut_name="$entered_name"
+            fi
+        fi
+
+        if [ "$bms_mode" = "internal" ]; then
+            case "$shortcut_name" in
+                *" (Internal)") : ;;
+                *) shortcut_name="$shortcut_name (Internal)" ;;
+            esac
+        fi
+
+        # Sanitize the name for use as a filename
+        safe_shortcut_name="$(echo "$shortcut_name" | tr -cd '[:alnum:] _.-')"
+        if [ -z "$safe_shortcut_name" ]; then
+            safe_shortcut_name="Application"
+        fi
+
+        shortcuts_dir="$wine_prefix/shortcuts"
+        shortcut_script="$shortcuts_dir/$safe_shortcut_name.sh"
+        localshare_shortcut_desktop="${data_dir}/applications/$safe_shortcut_name.desktop"
+        home_shortcut_desktop="${XDG_DESKTOP_DIR:-$HOME/Desktop}/$safe_shortcut_name.desktop"
+
+        if [ -e "$shortcut_script" ] || [ -e "$localshare_shortcut_desktop" ] || [ -e "$home_shortcut_desktop" ]; then
+            if message question "A shortcut named \"$shortcut_name\" already exists.\n\nOverwrite it?"; then
+                break
+            fi
+            if [ "$use_zenity" -eq 0 ]; then
+                message error "A shortcut named \"$shortcut_name\" already exists and zenity is unavailable to rename it.\n\nAborting."
+                return 1
+            fi
+            continue
+        fi
+        break
+    done
+
+    # Generate a small wrapper script that carries the correct Wine environment
+    mkdir -p "$shortcuts_dir"
+    shortcut_exe_dir="$(dirname "$shortcut_exe")"
+
+    # Try to reuse the executable's own embedded icon (saved alongside the
+    # wrapper script, named after the shortcut); fall back to a generic Wine
+    # icon if icoutils isn't installed or nothing could be extracted.
+    shortcut_icon_value="wine"
+    extract_exe_icon "$shortcut_exe" "$shortcuts_dir/$safe_shortcut_name.png"
+    shortcut_icon_extract_status="$?"
+    if [ "$shortcut_icon_extract_status" -eq 0 ]; then
+        shortcut_icon_value="$shortcuts_dir/$safe_shortcut_name.png"
+    elif [ "$shortcut_icon_extract_status" -eq 2 ]; then
+        message warning "icoutils (wrestool/icotool) was not found on this system.\n\nThe shortcut icon could not be extracted from the executable, so a generic icon will be used instead.\n\nInstall the 'icoutils' package to enable icon extraction."
+    fi
+
+    {
+        echo "#!/usr/bin/env bash"
+        echo "# Application shortcut generated by bms-helper.sh"
+        echo "export WINEPREFIX=\"$wine_prefix\""
+        echo "export WINEDEBUG=\"\${WINEDEBUG:--all}\""
+        if [ -n "$wineserver_bin" ]; then
+            echo "export WINESERVER=\"$wineserver_bin\""
+        fi
+        echo "cd \"$shortcut_exe_dir\" || exit 1"
+        echo "exec \"$wine_bin\" \"$shortcut_exe\" \"\$@\""
+    } > "$shortcut_script"
+    chmod +x "$shortcut_script"
+
+    # Write the .desktop file to the user's Desktop and the applications menu
+    echo "[Desktop Entry]
+Name=$shortcut_name
+Type=Application
+Comment=$shortcut_name
+Terminal=false
+StartupNotify=true
+Categories=Application;
+Exec=\"$shortcut_script\"
+Path=$shortcut_exe_dir
+Icon=$shortcut_icon_value" > "$home_shortcut_desktop.tmp"
+
+    if [ -d "$(dirname "$home_shortcut_desktop")" ]; then
+        cp "$home_shortcut_desktop.tmp" "$home_shortcut_desktop"
+        chmod +x "$home_shortcut_desktop"
+    fi
+
+    mkdir -p "${data_dir}/applications"
+    cp "$home_shortcut_desktop.tmp" "$localshare_shortcut_desktop"
+    chmod +x "$localshare_shortcut_desktop"
+    rm -f "$home_shortcut_desktop.tmp"
+
+    if [ -x "$(command -v update-desktop-database)" ]; then
+        update-desktop-database "${data_dir}/applications" 2>/dev/null
+    fi
+
+    message info "A desktop shortcut for $shortcut_name has been created:\n$home_shortcut_desktop"
+    return 0
+}
+
+# MARK: remove_shortcut_menu()
+# List the application shortcuts created for the current prefix (via
+# add_application_shortcut) and let the user select which ones to remove.
+remove_shortcut_menu() {
+    getdirs
+    if [ "$?" -eq 1 ]; then
+        message warning "Unable to list application shortcuts."
+        return 1
+    fi
+
+    shortcuts_dir="$wine_prefix/shortcuts"
+
+    unset shortcut_list_names
+    unset shortcut_list_scripts
+    unset menu_options
+    unset menu_actions
+
+    if [ -d "$shortcuts_dir" ]; then
+        for item in "$shortcuts_dir"/*.sh; do
+            [ -f "$item" ] || continue
+            shortcut_list_names+=("$(basename "$item" .sh)")
+            shortcut_list_scripts+=("$item")
+        done
+    fi
+
+    if [ "${#shortcut_list_scripts[@]}" -eq 0 ]; then
+        message info "No application shortcuts found in this prefix."
+        return 0
+    fi
+
+    # Configure the menu
+    menu_text_zenity="Select the application shortcut(s) you want to remove:"
+    menu_text_terminal="Select the application shortcut(s) you want to remove:"
+    menu_text_height="320"
+    menu_type="checklist"
+    goback="Return to the apps menu"
+
+    # Create menu options for the installed shortcuts
+    for (( i=0; i<"${#shortcut_list_names[@]}"; i++ )); do
+        menu_options+=("${shortcut_list_names[i]}")
+        menu_actions+=("remove_shortcut_delete $i")
+    done
+
+    # Complete the menu by adding the option to go back to the previous menu
+    menu_options+=("$goback")
+    menu_actions+=(":") # no-op
+
+    # Calculate the total height the menu should be
+    menu_height="$(($menu_option_height * ${#menu_options[@]} + $menu_text_height + $menu_text_height_zenity4))"
+    # Cap menu height
+    if [ "$menu_height" -gt "$menu_height_max" ]; then
+        menu_height="$menu_height_max"
+    fi
+
+    # Set the label for the cancel button
+    cancel_label="Go Back"
+
+    # Call the menu function.  It will use the options as configured above
+    menu
+}
+
+# MARK: remove_shortcut_delete()
+# Remove the wrapper script, icon, and .desktop files for the selected
+# shortcut(s). Called by remove_shortcut_menu() with array index arguments.
+#
+# The following variables are expected to be set before calling this function:
+# - shortcuts_dir (string)
+# - shortcut_list_names (array)
+# - shortcut_list_scripts (array)
+remove_shortcut_delete() {
+    # This function expects at least one index number for the array shortcut_list_names to be passed in as an argument
+    if [ -z "$1" ]; then
+        debug_print exit "Script error: The remove_shortcut_delete function expects an argument. Aborting."
+    fi
+
+    if [ "${#shortcut_list_names[@]}" -eq 0 ]; then
+        debug_print exit "Script error: The array 'shortcut_list_names' was not set before calling the remove_shortcut_delete function. Aborting."
+    fi
+
+    unset removed_shortcut_names
+    for shortcut_index in "$@"; do
+        removed_shortcut_name="${shortcut_list_names[shortcut_index]}"
+
+        rm -f "${shortcut_list_scripts[shortcut_index]}"
+        rm -f "$shortcuts_dir/$removed_shortcut_name.png"
+        rm -f "${data_dir}/applications/$removed_shortcut_name.desktop"
+        rm -f "${XDG_DESKTOP_DIR:-$HOME/Desktop}/$removed_shortcut_name.desktop"
+
+        removed_shortcut_names+=("$removed_shortcut_name")
+    done
+
+    if [ -x "$(command -v update-desktop-database)" ]; then
+        update-desktop-database "${data_dir}/applications" 2>/dev/null
+    fi
+
+    message info "Removed the following application shortcut(s):\n$(printf '%s\n' "${removed_shortcut_names[@]}")"
+}
+
 # MARK: install_opentrack_windows()
 # Download the latest OpenTrack Windows installer and launch it in the target prefix
 install_opentrack_windows() {
@@ -3509,20 +3944,7 @@ install_opentrack_windows() {
     fi
 
     get_current_runner
-    wine_bin=""
-    wineserver_bin=""
-    if [ -n "$launcher_winepath" ] && [ -x "$launcher_winepath/wine" ]; then
-        wine_bin="$launcher_winepath/wine"
-        if [ -x "$launcher_winepath/wineserver" ]; then
-            wineserver_bin="$launcher_winepath/wineserver"
-        fi
-    else
-        wine_bin="$(command -v wine 2>/dev/null || true)"
-        wineserver_bin="$(command -v wineserver 2>/dev/null || true)"
-    fi
-
-    if [ -z "$wine_bin" ] || [ ! -x "$wine_bin" ]; then
-        message error "Unable to locate a usable wine binary for this install.\n\nConfigure a Proton runner first or install Wine on the host system."
+    if ! resolve_wine_runner_bins; then
         return 1
     fi
 
@@ -5768,14 +6190,15 @@ while true; do
     fi
     dxvk_msg_wine="Manage DXVK"
     maintenance_msg="Maintenance and Troubleshooting"
+    apps_msg="Manage & Install other Apps"
     #randomizer_msg="Get a random Penguin's Falcon BMS referral code"
     quit_msg="Quit"
 
     # Set the options to be displayed in the menu
     proton_msg="Manage Proton Runners"
-    menu_options=("$preflight_msg" "$install_msg_wine" "$proton_msg" "$maintenance_msg" "$quit_msg")
+    menu_options=("$preflight_msg" "$install_msg_wine" "$proton_msg" "$maintenance_msg" "$apps_msg" "$quit_msg")
     # Set the corresponding functions to be called for each of the options
-    menu_actions=("preflight_check" "$install_action" "proton_manage" "maintenance_menu" "quit")
+    menu_actions=("preflight_check" "$install_action" "proton_manage" "maintenance_menu" "manage_apps_menu" "quit")
 
     # Calculate the total height the menu should be
     # menu_option_height = pixels per menu option
