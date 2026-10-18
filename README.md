@@ -38,8 +38,11 @@ Configuration is saved in *$XDG_CONFIG_HOME/bms-helper/*
 - `Install PowerShell into Wine prefix`
   - Uses protontricks for the install workflow
 
-- `Install OpenTrack for Windows`
-  - Downloads the latest `*-win32-setup.exe` from the OpenTrack GitHub releases page and runs it silently with `/silent` inside the currently targeted Wine prefix
+- `Set up OpenTrack head tracking (native Linux)`
+  - Configures native Linux OpenTrack to feed Falcon BMS through Proton (see **Head tracking (OpenTrack)** below). Offers to remove a Windows OpenTrack from the prefix, and builds OpenTrack from source if no Wine-enabled build is installed
+
+- `Uninstall an application from the prefix`
+  - Lists the Windows applications registered in the targeted prefix and runs the selected one's own uninstaller, then removes helper shortcuts whose executable is gone. Falcon BMS, Wine Mono/Gecko, .NET and Visual C++ runtimes are not listed
 
 - `Display Helper and Falcon BMS directories`
   - Show all the directories currently in use by both the Helper and Falcon BMS
@@ -59,7 +62,7 @@ Configuration is saved in *$XDG_CONFIG_HOME/bms-helper/*
 
 _Dependencies: **bash**, **coreutils**, **curl**, **polkit**, **wine**, **protontricks**_
 _Archive Dependencies: **cabextract**, **unzip**_
-_Optional Dependencies: **zenity** (GUI), **winetricks** (custom-prefix launcher font/runtime fixes), **python3** + **python-evdev** (MFD helper), **gamemode**, **mangohud**_
+_Optional Dependencies: **zenity** (GUI), **opentrack** built with Wine support (head tracking; the helper can build it), **winetricks** (custom-prefix launcher font/runtime fixes), **python3** + **python-evdev** (MFD helper), **gamemode**, **mangohud**_
 
 ## Notes
 #### Forked and inspired from:
@@ -75,7 +78,7 @@ These notes summarize the current launcher behavior reflected in the latest scri
 - `PROTON_LOG` is no longer forced on for every launch; it is now controlled through an environment toggle.
 - Proton fsync and esync can be disabled explicitly for troubleshooting without editing the launcher.
 - The launcher can auto-start the bundled `tools/mfd-joystick.py` helper when present and stop it again when Falcon BMS exits.
-- The launcher can also auto-start `opentrack.exe` when it is installed inside the Falcon BMS prefix under `drive_c/Program Files (x86)`, and it now does that only after Falcon's launcher or game process is already running.
+- Head tracking now uses native Linux OpenTrack through its Wine output and a per-prefix Proton bridge; a Windows OpenTrack inside the prefix is no longer needed or auto-started.
 - The MFD helper can also be overridden with `BMS_MFD_JOYSTICK_SCRIPT` if you keep the script in a different path.
 - When the launcher is regenerated or repaired, the helper also refreshes an existing `mfd-joystick.py` copy already placed beside `bms-launcher.sh`.
 - Proton management now includes a dedicated menu entry for Proton installs detected from Steam and common OS locations.
@@ -89,13 +92,23 @@ The generated launcher exports a set of environment variables you can override b
 - `BMS_USE_MANGOHUD=1|0`: wrap the game/launcher process with `mangohud` when available.
 - `BMS_USE_FSYNC=1|0`: disable fsync by exporting `PROTON_NO_FSYNC=1` when set to `0`.
 - `BMS_USE_ESYNC=1|0`: disable esync by exporting `PROTON_NO_ESYNC=1` when set to `0`.
-- `BMS_AUTO_LAUNCH_OPENTRACK=1|0`: auto-start OpenTrack from the Windows install inside the prefix when found under `Program Files (x86)`.
-- `BMS_OPENTRACK_DELAY=<seconds>`: wait this many seconds after Falcon's launcher or game process is detected before starting OpenTrack. Defaults to `3`.
 - `BMS_MFD_JOYSTICK_SCRIPT=/path/to/mfd-joystick.py`: point the launcher at a custom MFD helper script.
 - `BMS_MFD_GRAB_PHYSICAL=1|0`: when the MFD helper runs, exclusively grab the physical MFD evdev devices so only the virtual replacements are visible to the game.
 - `BMS_PROTONTRICKS_APPID=<steam app id>`: let the launcher use `protontricks` for one-time font/runtime setup on Steam-backed installs.
 
 The launcher always runs Falcon BMS through Proton; it exits with an error if no Proton runner is configured instead of falling back to Wine. Use `Manage Proton Runners` in the helper to install or select one.
+
+**Head tracking (OpenTrack)**
+
+Falcon BMS reads head tracking through the TrackIR interface (`NPClient64.dll`). Native Linux OpenTrack provides it with its `Wine -- Windows layer for Unix` output, which runs a small bridge (`opentrack-wrapper-wine.exe.so`) inside the game's prefix. No Windows OpenTrack is needed.
+
+`Set up OpenTrack head tracking (native Linux)` in `Manage & Install other Apps`:
+
+- Offers to uninstall a Windows OpenTrack found in the prefix (it would compete for the TrackIR registry path).
+- Uses an installed OpenTrack built with Wine support (e.g. the AUR `opentrack` package). Otherwise it installs the build dependencies with your package manager (pacman, apt, dnf or zypper) and builds OpenTrack from source into `~/.local/share/bms-helper/opentrack`, with an `OpenTrack` menu entry.
+- Writes `opentrack-proton-bridge.sh` into the prefix and sets the active OpenTrack profile's output to `Wine`, protocol `NPClient`, with that script as the custom Wine binary. The previous profile is saved as `<profile>.ini.bms-helper.bak`.
+
+Start OpenTrack and press Start, before or after launching Falcon BMS. The bridge waits until Falcon's launcher or game is running, then starts the wrapper with the prefix's Proton runner and the game's esync/fsync/ntsync settings, so it joins the game's wineserver inside the umu/pressure-vessel container. It stops the wrapper again when Falcon exits. The wrapper and DLLs are staged in `<prefix>/opentrack/`, because the container cannot see host paths like `/usr/libexec`. Bridge log: `<prefix>/opentrack/bridge.log`.
 
 **MFD helper**
 

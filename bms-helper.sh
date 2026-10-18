@@ -246,7 +246,14 @@ helper_dir="$(realpath "$0" | xargs -0 dirname)"
 # generated content changes in a way that existing installs must pick up
 # (e.g. the checkinstall exit-code contract) -- this forces update_launch_script.
 bms_launcher_name="bms-launcher.sh"
-bms_launcher_version="1.22"
+bms_launcher_version="1.23"
+
+# Native Linux OpenTrack (head tracking). Falcon BMS talks to it through
+# OpenTrack's "Wine" output, whose bridge we run inside the Proton prefix.
+# opentrack_build_ref pins the upstream commit used for source builds.
+opentrack_build_ref="f009bb52cab7bf3884b8a9b3a326aa9ce84d6299"
+opentrack_local_prefix="$data_dir/bms-helper/opentrack"
+opentrack_bridge_name="opentrack-proton-bridge.sh"
 
 # Temporary directory
 tmp_dir="$(mktemp -d -t "bmshelper.XXXXXXXXXX")"
@@ -1323,8 +1330,6 @@ unset SDL_VIDEODRIVER
 # - MangoHud defaults off
 export BMS_USE_GAMEMODE="\${BMS_USE_GAMEMODE:-1}"
 export BMS_USE_MANGOHUD="\${BMS_USE_MANGOHUD:-0}"
-export BMS_AUTO_LAUNCH_OPENTRACK="\${BMS_AUTO_LAUNCH_OPENTRACK:-0}"
-export BMS_OPENTRACK_DELAY="\${BMS_OPENTRACK_DELAY:-3}"
 
 # fsync/esync default on; set to 0 only for troubleshooting
 export PROTON_NO_FSYNC=1
@@ -1620,78 +1625,6 @@ apply_launcher_ui_fixes() {
 ############################################################################
 sync_mfd_joystick_registry_if_present
 
-detect_opentrack_exe() {
-    opentrack_exe=""
-
-    if [ "\$BMS_AUTO_LAUNCH_OPENTRACK" != "1" ]; then
-        return 0
-    fi
-
-    default_opentrack_exe="\$WINEPREFIX/drive_c/Program Files (x86)/opentrack/opentrack.exe"
-    if [ -f "\$default_opentrack_exe" ]; then
-        opentrack_exe="\$default_opentrack_exe"
-        return 0
-    fi
-
-    default_opentrack_dir="\$WINEPREFIX/drive_c/Program Files (x86)"
-    if [ -d "\$default_opentrack_dir" ]; then
-        opentrack_exe="\$(find "\$default_opentrack_dir" -maxdepth 3 -type f -iname 'opentrack.exe' 2>/dev/null | head -n 1)"
-    fi
-}
-
-launch_opentrack_if_present() {
-    detect_opentrack_exe
-
-    if [ -z "\$opentrack_exe" ] || [ ! -f "\$opentrack_exe" ]; then
-        return 0
-    fi
-
-    if pgrep -fi '(^|[[:space:]\\/])opentrack\\.exe([[:space:]]|$)' >/dev/null 2>&1; then
-        echo "opentrack=already_running exe=\$opentrack_exe" >> "\$launch_log"
-        return 0
-    fi
-
-    opentrack_dir="\$(dirname "\$opentrack_exe")"
-    opentrack_name="\$(basename "\$opentrack_exe")"
-
-    # Use Wine's start helper so OpenTrack detaches immediately instead of
-    # occupying the same Proton launch path as the Falcon launcher.
-    (
-        cd "\$opentrack_dir" || exit 1
-        run_wine start /d "\$opentrack_dir" /b "\$opentrack_name" >> "\$launch_log" 2>&1
-    ) >/dev/null 2>&1 &
-    echo "opentrack=started runtime=wine-start exe=\$opentrack_exe" >> "\$launch_log"
-}
-
-launch_opentrack_after_falcon_start() {
-    if [ "\$BMS_AUTO_LAUNCH_OPENTRACK" != "1" ]; then
-        return 0
-    fi
-
-    (
-        opentrack_delay="\$BMS_OPENTRACK_DELAY"
-        case "\$opentrack_delay" in
-            ''|*[!0-9]*) opentrack_delay=3 ;;
-        esac
-
-        attempts=0
-        while [ "\$attempts" -lt 30 ]; do
-            if pgrep -fi 'Falcon BMS\.exe|FalconBMS_Alternative_Launcher\.exe' >/dev/null 2>&1; then
-                if [ "\$opentrack_delay" -gt 0 ]; then
-                    echo "opentrack=waiting delay=\${opentrack_delay}s reason=falcon_process_detected" >> "\$launch_log"
-                    sleep "\$opentrack_delay"
-                fi
-                launch_opentrack_if_present
-                exit 0
-            fi
-            attempts=\$((attempts + 1))
-            sleep 1
-        done
-
-        echo "opentrack=skipped reason=no_falcon_process_detected" >> "\$launch_log"
-    ) >/dev/null 2>&1 &
-}
-
 case "\$1" in
     shell)
         echo "Entering Wine prefix shell. Type 'exit' when done."
@@ -1761,7 +1694,6 @@ echo "=== \$(date '+%Y-%m-%d %H:%M:%S') bms-launcher start (proton_path=\$proton
 # Start optional helper processes now that the launch is proceeding.
 start_mfd_joystick_if_present
 monitor_mfd_joystick_lifecycle
-launch_opentrack_after_falcon_start
 
 runner_root="\$proton_path"
 # Keep Proton launch independent from any local Steam installation.
@@ -3468,15 +3400,16 @@ maintenance_menu() {
         config_msg="Open Wine prefix configuration"
         controllers_msg="Open Wine controller configuration"
         protontricks_msg="Launch Protontricks"
+        uninstall_app_msg="Uninstall an application from the prefix"
         bms_launcher_msg="Update/Re-install Falcon BMS"
         dirs_msg="Display Helper and Falcon BMS directories"
         reset_msg="Reset Helper configs"
         quit_msg="Return to the main menu"
 
         # Set the options to be displayed in the menu
-        menu_options=("$prefix_msg" "$launcher_msg" "$checkinstall_msg" "$config_msg" "$controllers_msg" "$protontricks_msg" "$dirs_msg" "$reset_msg" "$quit_msg")
+        menu_options=("$prefix_msg" "$launcher_msg" "$checkinstall_msg" "$config_msg" "$controllers_msg" "$protontricks_msg" "$uninstall_app_msg" "$dirs_msg" "$reset_msg" "$quit_msg")
         # Set the corresponding functions to be called for each of the options
-        menu_actions=("switch_prefix" "update_launch_script" "run_installation_checks" "call_launch_script config" "call_launch_script controllers" "launch_protontricks" "display_dirs" "reset_helper" "menu_loop_done")
+        menu_actions=("switch_prefix" "update_launch_script" "run_installation_checks" "call_launch_script config" "call_launch_script controllers" "launch_protontricks" "uninstall_application_menu" "display_dirs" "reset_helper" "menu_loop_done")
 
         # Calculate the total height the menu should be
         # menu_option_height = pixels per menu option
@@ -3510,13 +3443,13 @@ manage_apps_menu() {
         add_shortcut_msg="Add an application shortcut"
         remove_shortcut_msg="Remove an application shortcut"
         powershell_msg="Install PowerShell for Windows"
-        opentrack_msg="Install OpenTrack for Windows"
+        opentrack_msg="Set up OpenTrack head tracking (native Linux)"
         quit_msg="Return to the main menu"
 
         # Set the options to be displayed in the menu
         menu_options=("$install_app_msg" "$add_shortcut_msg" "$remove_shortcut_msg" "$powershell_msg" "$opentrack_msg" "$quit_msg")
         # Set the corresponding functions to be called for each of the options
-        menu_actions=("install_new_application" "add_application_shortcut" "remove_shortcut_menu" "install_powershell" "install_opentrack_windows" "menu_loop_done")
+        menu_actions=("install_new_application" "add_application_shortcut" "remove_shortcut_menu" "install_powershell" "setup_opentrack_native" "menu_loop_done")
 
         # Calculate the total height the menu should be
         # menu_option_height = pixels per menu option
@@ -3913,14 +3846,8 @@ remove_shortcut_delete() {
 
     unset removed_shortcut_names
     for shortcut_index in "$@"; do
-        removed_shortcut_name="${shortcut_list_names[shortcut_index]}"
-
-        rm -f "${shortcut_list_scripts[shortcut_index]}"
-        rm -f "$shortcuts_dir/$removed_shortcut_name.png"
-        rm -f "${data_dir}/applications/$removed_shortcut_name.desktop"
-        rm -f "${XDG_DESKTOP_DIR:-$HOME/Desktop}/$removed_shortcut_name.desktop"
-
-        removed_shortcut_names+=("$removed_shortcut_name")
+        delete_application_shortcut "${shortcut_list_scripts[shortcut_index]}"
+        removed_shortcut_names+=("${shortcut_list_names[shortcut_index]}")
     done
 
     if [ -x "$(command -v update-desktop-database)" ]; then
@@ -3930,16 +3857,25 @@ remove_shortcut_delete() {
     message info "Removed the following application shortcut(s):\n$(printf '%s\n' "${removed_shortcut_names[@]}")"
 }
 
-# MARK: install_opentrack_windows()
-# Download the latest OpenTrack Windows installer and launch it in the target prefix
-install_opentrack_windows() {
-    opentrack_repo="opentrack/opentrack"
-    opentrack_api_url="https://api.github.com/repos/${opentrack_repo}/releases/latest"
-    opentrack_release_page="https://github.com/${opentrack_repo}/releases"
+# MARK: delete_application_shortcut()
+# Remove a shortcut's wrapper script, icon and .desktop files.
+# Takes the path of the wrapper script under $wine_prefix/shortcuts.
+delete_application_shortcut() {
+    deleted_shortcut_name="$(basename "$1" .sh)"
+    rm -f "$1"
+    rm -f "$(dirname "$1")/$deleted_shortcut_name.png"
+    rm -f "${data_dir}/applications/$deleted_shortcut_name.desktop"
+    rm -f "${XDG_DESKTOP_DIR:-$HOME/Desktop}/$deleted_shortcut_name.desktop"
+}
 
+# MARK: uninstall_application_menu()
+# List the Windows applications registered in the prefix and run the selected
+# one's own uninstaller. Falcon BMS (see 'Uninstall Falcon BMS') and the
+# runtimes its launcher depends on are not listed.
+uninstall_application_menu() {
     getdirs
     if [ "$?" -eq 1 ]; then
-        message warning "Unable to install OpenTrack."
+        message warning "Unable to list installed applications."
         return 1
     fi
 
@@ -3948,30 +3884,10 @@ install_opentrack_windows() {
         return 1
     fi
 
-    progress_bar start "Checking latest OpenTrack release. Please wait..."
-    progress_update "Querying OpenTrack releases from GitHub..."
-
-    opentrack_api_dump="$tmp_dir/opentrack-latest-release.json"
-    if ! curl -sL "$opentrack_api_url" -o "$opentrack_api_dump"; then
-        progress_bar stop
-        message error "Unable to query the latest OpenTrack release from GitHub.\n\n$opentrack_release_page"
+    if pgrep -fi '\\(Falcon BMS|FalconBMS_Alternative_Launcher)\.exe' >/dev/null 2>&1; then
+        message warning "Close Falcon BMS before uninstalling applications from its prefix."
         return 1
     fi
-
-    opentrack_download_url="$(grep -Eo '"browser_download_url": ?"[^"]+"' "$opentrack_api_dump" | cut -d '"' -f4 | cut -d '?' -f1 | grep -E -- '-win32-setup\.exe$' | head -n 1)"
-    if [ -z "$opentrack_download_url" ]; then
-        progress_bar stop
-        message error "Unable to locate a '*-win32-setup.exe' asset in the latest OpenTrack release.\n\n$opentrack_release_page"
-        return 1
-    fi
-    opentrack_download_name="$(basename "$opentrack_download_url")"
-    progress_bar stop
-
-    if ! download_file "$opentrack_download_url" "$opentrack_download_name" "OpenTrack installer"; then
-        return 1
-    fi
-
-    message info "The latest OpenTrack Windows installer has been downloaded.\n\nIt will now be run silently inside the targeted Wine prefix:\n$wine_prefix\n\nIf Falcon BMS is currently running, close it first."
 
     export WINEPREFIX="$wine_prefix"
     export WINEDEBUG="${WINEDEBUG:--all}"
@@ -3979,16 +3895,553 @@ install_opentrack_windows() {
         export WINESERVER="$wineserver_bin"
     fi
 
-    debug_print continue "Launching OpenTrack installer ${tmp_dir}/${opentrack_download_name} with /silent in prefix ${wine_prefix} using ${wine_bin}..."
-    "$wine_bin" "$tmp_dir/$opentrack_download_name" /silent
-    exit_code="$?"
+    unset uninstall_app_ids
+    unset uninstall_app_names
+    unset menu_options
+    unset menu_actions
 
-    if [ "$exit_code" -eq 1 ] || [ "$exit_code" -eq 126 ] || [ "$exit_code" -eq 127 ] || [ "$exit_code" -eq 130 ]; then
-        message warning "The OpenTrack installer exited with code $exit_code. See terminal output for details."
+    # Wine's uninstaller prints one "<id>|||<display name>" line per application
+    while IFS= read -r uninstall_line; do
+        case "$uninstall_line" in
+            *"|||"*) ;;
+            *) continue ;;
+        esac
+        uninstall_app_name="${uninstall_line#*|||}"
+        case "$uninstall_app_name" in
+            "Falcon BMS"*|"Wine Mono"*|"Wine Gecko"*|"Microsoft .NET"*|"Microsoft Visual C++"*|"Microsoft Windows Desktop Runtime"*)
+                continue
+                ;;
+        esac
+        uninstall_app_ids+=("${uninstall_line%%|||*}")
+        uninstall_app_names+=("$uninstall_app_name")
+    done < <("$wine_bin" uninstaller --list 2>&1 | tr -d '\r')
+
+    if [ "${#uninstall_app_ids[@]}" -eq 0 ]; then
+        message info "No uninstallable applications were found in this prefix.\n\n(Falcon BMS, Wine Mono/Gecko, .NET and Visual C++ runtimes are not listed.)"
+        return 0
+    fi
+
+    # Configure the menu
+    menu_text_zenity="Select the application to uninstall from:\n$wine_prefix"
+    menu_text_terminal="Select the application to uninstall from:\n$wine_prefix"
+    menu_text_height="320"
+    menu_type="radiolist"
+    goback="Return to the maintenance menu"
+
+    for (( i=0; i<"${#uninstall_app_names[@]}"; i++ )); do
+        menu_options+=("${uninstall_app_names[i]}")
+        menu_actions+=("uninstall_application_run $i")
+    done
+
+    # Complete the menu by adding the option to go back to the previous menu
+    menu_options+=("$goback")
+    menu_actions+=(":") # no-op
+
+    # Calculate the total height the menu should be
+    menu_height="$(($menu_option_height * ${#menu_options[@]} + $menu_text_height + $menu_text_height_zenity4))"
+    # Cap menu height
+    if [ "$menu_height" -gt "$menu_height_max" ]; then
+        menu_height="$menu_height_max"
+    fi
+
+    # Set the label for the cancel button
+    cancel_label="Go Back"
+
+    # Call the menu function.  It will use the options as configured above
+    menu
+}
+
+# MARK: uninstall_application_run()
+# Run the uninstaller for the application at the given index of the list
+# built by uninstall_application_menu(), then drop helper shortcuts whose
+# executable no longer exists.
+uninstall_application_run() {
+    uninstall_app_id="${uninstall_app_ids[$1]}"
+    uninstall_app_name="${uninstall_app_names[$1]}"
+
+    if ! message question "Uninstall \"$uninstall_app_name\" from:\n$wine_prefix ?\n\nThe application's own uninstaller may open; follow its prompts."; then
+        return 0
+    fi
+
+    debug_print continue "Uninstalling $uninstall_app_name ($uninstall_app_id) from $wine_prefix..."
+    "$wine_bin" uninstaller --remove "$uninstall_app_id"
+    # Uninstallers often re-spawn themselves, so wait for the prefix to go idle
+    if [ -n "$wineserver_bin" ] && [ -x "$wineserver_bin" ]; then
+        "$wineserver_bin" -w
+    fi
+
+    unset removed_shortcut_names
+    for uninstall_shortcut in "$wine_prefix/shortcuts"/*.sh; do
+        [ -f "$uninstall_shortcut" ] || continue
+        uninstall_shortcut_exe="$(sed -n 's/^exec "[^"]*" "\(.*\)" "\$@"$/\1/p' "$uninstall_shortcut")"
+        if [ -n "$uninstall_shortcut_exe" ] && [ ! -f "$uninstall_shortcut_exe" ]; then
+            delete_application_shortcut "$uninstall_shortcut"
+            removed_shortcut_names+=("$(basename "$uninstall_shortcut" .sh)")
+        fi
+    done
+    if [ "${#removed_shortcut_names[@]}" -gt 0 ] && [ -x "$(command -v update-desktop-database)" ]; then
+        update-desktop-database "${data_dir}/applications" 2>/dev/null
+    fi
+
+    if "$wine_bin" uninstaller --list 2>&1 | tr -d '\r' | grep -qF "$uninstall_app_id|||"; then
+        message warning "\"$uninstall_app_name\" is still registered in the prefix. Its uninstaller may have been cancelled or failed; see terminal output for details."
         return 1
     fi
 
-    message info "OpenTrack silent install finished. If installation succeeded, the launcher can now auto-start it from your Falcon BMS prefix."
+    uninstall_done_msg="\"$uninstall_app_name\" has been uninstalled."
+    if [ "${#removed_shortcut_names[@]}" -gt 0 ]; then
+        uninstall_done_msg="$uninstall_done_msg\n\nRemoved its shortcut(s):\n$(printf '%s\n' "${removed_shortcut_names[@]}")"
+    fi
+    message info "$uninstall_done_msg"
+    return 0
+}
+
+# MARK: opentrack_find_native()
+# Locate a native Linux OpenTrack built with Wine output support (SDK_WINE).
+# Prefers a distro/AUR install over the helper's own source build.
+# Sets opentrack_bin and opentrack_libexec; returns 1 if none is usable.
+opentrack_find_native() {
+    opentrack_bin=""
+    opentrack_libexec=""
+
+    for ot_candidate in "$(command -v opentrack 2>/dev/null)" "$opentrack_local_prefix/bin/opentrack"; do
+        [ -n "$ot_candidate" ] && [ -x "$ot_candidate" ] || continue
+        ot_libexec="$(dirname "$(realpath "$ot_candidate")")/../libexec/opentrack"
+        if [ -f "$ot_libexec/opentrack-wrapper-wine.exe.so" ] && [ -f "$ot_libexec/NPClient64.dll" ]; then
+            opentrack_bin="$ot_candidate"
+            opentrack_libexec="$(realpath "$ot_libexec")"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# MARK: opentrack_install_build_deps()
+# Install the packages needed to build OpenTrack with Wine support, using the
+# distro's package manager. Returns 1 if the user declined or it failed.
+opentrack_install_build_deps() {
+    ot_pm=""
+    ot_pkgs=()
+    ot_alts=()
+    if command -v pacman >/dev/null 2>&1; then
+        ot_pm="pacman"
+        ot_pkgs=(base-devel cmake ninja pkgconf curl qt6-base qt6-tools opencv procps-ng libx11 libxcb xorgproto wine)
+    elif command -v apt-get >/dev/null 2>&1; then
+        ot_pm="apt"
+        ot_pkgs=(build-essential cmake ninja-build pkg-config curl qt6-base-dev qt6-base-private-dev qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools libopencv-dev libx11-dev libxcb1-dev x11proto-dev)
+        ot_alts=("libproc2-dev libprocps-dev" "wine64-tools wine-tools")
+    elif command -v dnf >/dev/null 2>&1; then
+        ot_pm="dnf"
+        ot_pkgs=(gcc-c++ cmake ninja-build pkgconf-pkg-config curl qt6-qtbase-devel qt6-qtbase-private-devel qt6-qttools-devel qt6-linguist opencv-devel procps-ng-devel libX11-devel libxcb-devel xorg-x11-proto-devel wine-devel)
+    elif command -v zypper >/dev/null 2>&1; then
+        ot_pm="zypper"
+        ot_pkgs=(gcc-c++ cmake ninja pkgconf curl qt6-base-devel qt6-base-private-devel qt6-tools-devel qt6-linguist-devel opencv-devel libX11-devel libxcb-devel xorgproto-devel wine-devel)
+        ot_alts=("procps4-devel procps-devel")
+    else
+        message warning "Unable to detect a supported package manager (pacman, apt, dnf, zypper).\n\nInstall these build dependencies manually, then retry:\ncmake, ninja, pkg-config, a C++ compiler, Qt6 (base, private headers, tools/linguist), OpenCV, libproc2 or libprocps, X11/xcb headers and Wine development tools (wineg++)."
+        return 1
+    fi
+
+    # Pick the first available package from each "a b" alternatives group
+    for ot_group in "${ot_alts[@]}"; do
+        for ot_alt in $ot_group; do
+            case "$ot_pm" in
+                apt) apt-cache show "$ot_alt" >/dev/null 2>&1 || continue ;;
+                zypper) zypper -q -n info "$ot_alt" 2>/dev/null | grep -q '^Name' || continue ;;
+            esac
+            ot_pkgs+=("$ot_alt")
+            break
+        done
+    done
+
+    case "$ot_pm" in
+        pacman) ot_install_cmd="pacman -S --needed --noconfirm ${ot_pkgs[*]}" ;;
+        apt) ot_install_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ${ot_pkgs[*]}" ;;
+        dnf) ot_install_cmd="dnf install -y ${ot_pkgs[*]}" ;;
+        zypper) ot_install_cmd="zypper --non-interactive install ${ot_pkgs[*]}" ;;
+    esac
+
+    if ! message question "Building OpenTrack requires these packages:\n\n${ot_pkgs[*]}\n\nInstall them now with $ot_pm? (requires administrator privileges)\n\nChoose No if they are already installed."; then
+        return 0
+    fi
+
+    debug_print continue "Installing OpenTrack build dependencies: $ot_install_cmd"
+    if ! try_exec root "$ot_install_cmd"; then
+        message error "Installing the OpenTrack build dependencies failed. See terminal output for details."
+        return 1
+    fi
+    return 0
+}
+
+# MARK: build_opentrack_native()
+# Download OpenTrack at the pinned commit and build it with Wine output support
+# into $opentrack_local_prefix (no root needed apart from build dependencies).
+build_opentrack_native() {
+    opentrack_install_build_deps || return 1
+
+    # Some distros keep winegcc/wineg++ outside of PATH
+    for ot_wine_tools in /usr/lib/wine /usr/lib64/wine /usr/lib/x86_64-linux-gnu/wine /usr/lib/x86_64-linux-gnu/wine/bin; do
+        if [ -x "$ot_wine_tools/wineg++" ]; then
+            PATH="$PATH:$ot_wine_tools"
+            break
+        fi
+    done
+    for ot_tool in cmake wineg++ curl tar; do
+        if ! command -v "$ot_tool" >/dev/null 2>&1; then
+            message error "'$ot_tool' was not found. It is required to build OpenTrack with Wine support.\n\nInstall your distro's Wine development tools (e.g. wine-devel or wine64-tools) and CMake, then retry."
+            return 1
+        fi
+    done
+
+    ot_generator="Unix Makefiles"
+    if command -v ninja >/dev/null 2>&1; then
+        ot_generator="Ninja"
+    fi
+
+    ot_src="$tmp_dir/opentrack-src"
+    ot_build="$tmp_dir/opentrack-build"
+    ot_log="$(dirname "$opentrack_local_prefix")/opentrack-build.log"
+    mkdir -p "$ot_src" "$(dirname "$opentrack_local_prefix")"
+    : > "$ot_log"
+
+    progress_bar start "Building OpenTrack. This takes a few minutes..."
+    progress_update "Downloading OpenTrack source ($opentrack_build_ref)..."
+    debug_print continue "Building OpenTrack $opentrack_build_ref into $opentrack_local_prefix (log: $ot_log)..."
+
+    if ! curl -fsSL "https://github.com/opentrack/opentrack/archive/${opentrack_build_ref}.tar.gz" -o "$tmp_dir/opentrack-src.tar.gz" >> "$ot_log" 2>&1 ||
+       ! tar -xzf "$tmp_dir/opentrack-src.tar.gz" -C "$ot_src" --strip-components=1 >> "$ot_log" 2>&1; then
+        progress_bar stop
+        message error "Unable to download the OpenTrack source code.\n\nLog: $ot_log"
+        return 1
+    fi
+
+    # OPENTRACK_WINE_ARCH=-m64: Falcon BMS is 64-bit and loads NPClient64.dll,
+    # and 64-bit winelib builds work with both old and new WoW64 Wine/Proton.
+    progress_update "Configuring and compiling OpenTrack..."
+    if ! cmake -S "$ot_src" -B "$ot_build" -G "$ot_generator" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDK_WINE=ON \
+            -DOPENTRACK_WINE_ARCH=-m64 \
+            -DCMAKE_INSTALL_PREFIX="$opentrack_local_prefix" >> "$ot_log" 2>&1 ||
+       ! cmake --build "$ot_build" -j"$(nproc)" >> "$ot_log" 2>&1; then
+        progress_bar stop
+        message error "Building OpenTrack failed. Check that all build dependencies are installed.\n\nLog: $ot_log\n\n$(tail -n 5 "$ot_log")"
+        return 1
+    fi
+
+    progress_update "Installing OpenTrack to $opentrack_local_prefix..."
+    rm -rf "${opentrack_local_prefix:?}"
+    if ! cmake --install "$ot_build" >> "$ot_log" 2>&1; then
+        progress_bar stop
+        message error "Installing OpenTrack failed.\n\nLog: $ot_log"
+        return 1
+    fi
+    echo "$opentrack_build_ref" > "$opentrack_local_prefix/.bms-helper-ref"
+    progress_bar stop
+
+    # Menu entry for the local build. --platform xcb keeps global hotkeys working on Wayland.
+    mkdir -p "$data_dir/applications"
+    cat > "$data_dir/applications/opentrack-bms-helper.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=OpenTrack
+Comment=Head tracking software (built by bms-helper)
+Exec="$opentrack_local_prefix/bin/opentrack" --platform xcb
+Icon=camera-web
+Terminal=false
+StartupNotify=true
+Categories=Utility;
+EOF
+    return 0
+}
+
+# MARK: remove_windows_opentrack()
+# Uninstall a Windows OpenTrack from the prefix. It is no longer needed and its
+# NPClient registry path would compete with the native Linux bridge.
+remove_windows_opentrack() {
+    ot_win_dir="$1"
+
+    if pgrep -fi 'Falcon BMS\.exe|FalconBMS_Alternative_Launcher\.exe|opentrack\.exe' >/dev/null 2>&1; then
+        message warning "Close Falcon BMS and the Windows OpenTrack before removing it."
+        return 1
+    fi
+
+    resolve_wine_runner_bins || return 1
+    export WINEPREFIX="$wine_prefix"
+    export WINEDEBUG="${WINEDEBUG:--all}"
+
+    if [ -f "$ot_win_dir/unins000.exe" ]; then
+        debug_print continue "Running the Windows OpenTrack uninstaller in $wine_prefix..."
+        "$wine_bin" "$ot_win_dir/unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+        # The Inno Setup uninstaller re-spawns itself from a temp copy, so wait
+        # for the whole prefix to go idle instead of the first process.
+        if [ -n "$wineserver_bin" ] && [ -x "$wineserver_bin" ]; then
+            "$wineserver_bin" -w
+        fi
+    fi
+    rm -rf "${ot_win_dir:?}"
+
+    # Drop start-menu entries Wine created for it in this prefix. The menu
+    # folder is shared by all prefixes, so only remove it once empty.
+    ot_menu_dir="$data_dir/applications/wine/Programs/opentrack"
+    if [ -d "$ot_menu_dir" ]; then
+        grep -lF "$wine_prefix" "$ot_menu_dir"/*.desktop 2>/dev/null | xargs -r -d '\n' rm -f
+        rmdir "$ot_menu_dir" 2>/dev/null
+    fi
+    return 0
+}
+
+# MARK: write_opentrack_bridge_script()
+# Write the per-prefix script that OpenTrack's "Wine" output runs as its
+# custom Wine binary. See the comments in the generated script.
+write_opentrack_bridge_script() {
+    ot_prefix="$1"
+    ot_bridge_script="$ot_prefix/$opentrack_bridge_name"
+
+    {
+        cat <<EOF
+#!/usr/bin/env bash
+# OpenTrack -> Falcon BMS (Proton) bridge, generated by bms-helper.sh.
+prefix="$ot_prefix"
+EOF
+        cat <<'EOF'
+
+# OpenTrack's "Wine" output starts this script as its custom Wine binary:
+#   <this script> <opentrack libexec>/opentrack-wrapper-wine.exe.so
+# The wrapper copies head pose from OpenTrack into the TrackIR/FreeTrack shared
+# memory that Falcon BMS reads through NPClient64.dll.
+#
+# Under Proton the game's wineserver runs inside the umu/pressure-vessel
+# container and can only open files visible there, so the wrapper and DLLs are
+# staged inside the prefix. The wrapper is started only once Falcon BMS runs,
+# with the runner's own wine and the game's sync settings, so it joins the
+# game's wineserver instead of starting a separate one.
+
+bridge_dir="$prefix/opentrack"
+stage_dir="$bridge_dir/libexec/opentrack"
+log="$bridge_dir/bridge.log"
+mkdir -p "$bridge_dir/bin" "$stage_dir"
+: > "$log"
+log_msg() { echo "$(date '+%H:%M:%S') $*" >> "$log"; }
+
+src_dir="$(dirname "${1:-.}")"
+for f in opentrack-wrapper-wine.exe.so NPClient.dll NPClient64.dll freetrackclient.dll freetrackclient64.dll; do
+    if [ -f "$src_dir/$f" ]; then
+        cp -u "$src_dir/$f" "$stage_dir/$f"
+    fi
+done
+if [ ! -f "$stage_dir/opentrack-wrapper-wine.exe.so" ]; then
+    log_msg "error: opentrack-wrapper-wine.exe.so not found (argument: '${1:-}')"
+    exit 1
+fi
+
+runner="$(sed -n '1p' "$prefix/current_runner" 2>/dev/null | tr -d '\r')"
+if [ -x "$runner/files/bin/wine" ]; then
+    wine_bin="$runner/files/bin/wine"
+elif [ -x "$runner/bin/wine" ]; then
+    wine_bin="$runner/bin/wine"
+else
+    log_msg "error: no Proton runner configured for $prefix"
+    exit 1
+fi
+
+# Proton runs the game with WINEPREFIX=<prefix>/pfx, a symlink to the prefix.
+if [ -e "$prefix/pfx" ]; then
+    export WINEPREFIX="$prefix/pfx"
+else
+    export WINEPREFIX="$prefix"
+fi
+export WINEDEBUG="${WINEDEBUG:--all}"
+wrapper_pattern='\\opentrack-wrapper-wine\.exe\.so'
+
+# Only match Windows-side processes: Wine rewrites their command line to a
+# Windows path (backslashes), while the host-side umu-run/proton processes
+# carry the unix path to the same exe. Matching those would start the wrapper
+# before the game's wineserver exists, and keep umu from exiting afterwards.
+find_game_pid() {
+    local pid env
+    for pid in $(pgrep -fi '\\(Falcon BMS|FalconBMS_Alternative_Launcher)\.exe'); do
+        env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)" || continue
+        case $'\n'"$env"$'\n' in
+            *$'\n'"WINEPREFIX=$prefix"$'\n'*|*$'\n'"WINEPREFIX=$prefix/"$'\n'*|\
+            *$'\n'"WINEPREFIX=$prefix/pfx"$'\n'*|*$'\n'"WINEPREFIX=$prefix/pfx/"$'\n'*)
+                echo "$pid"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+# A wine client whose esync/fsync/ntsync mode differs from the wineserver's
+# can hang, so copy exactly what Proton set for the game.
+load_game_sync_env() {
+    local line
+    unset WINEESYNC WINEFSYNC WINENTSYNC
+    while IFS= read -r line; do
+        case "$line" in
+            WINEESYNC=*|WINEFSYNC=*|WINENTSYNC=*) export "$line" ;;
+        esac
+    done < <(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null)
+}
+
+stop_wrapper() {
+    # The wine client exiting does not end the Windows-side wrapper process.
+    if [ -n "$child" ]; then
+        kill "$child" 2>/dev/null
+    fi
+    pkill -f "$wrapper_pattern" 2>/dev/null
+}
+
+child=""
+trap 'stop_wrapper; exit 0' TERM INT HUP
+
+log_msg "waiting for Falcon BMS (prefix=$prefix runner=$runner)"
+while true; do
+    game_pid="$(find_game_pid)"
+    if [ -z "$game_pid" ]; then
+        sleep 2
+        continue
+    fi
+
+    load_game_sync_env "$game_pid"
+    log_msg "starting wrapper for pid $game_pid (WINEESYNC=${WINEESYNC:-} WINEFSYNC=${WINEFSYNC:-} WINENTSYNC=${WINENTSYNC:-})"
+    # The wrapper registers <cwd>/../libexec/opentrack/ as the NPClient/FreeTrack path.
+    (cd "$bridge_dir/bin" && exec "$wine_bin" "$stage_dir/opentrack-wrapper-wine.exe.so") >> "$log" 2>&1 &
+    child=$!
+
+    # Stop the wrapper once Falcon BMS is gone (two consecutive misses, to ride
+    # out the launcher -> game hand-off), so the game's wineserver can exit.
+    misses=0
+    while kill -0 "$child" 2>/dev/null; do
+        sleep 2
+        if find_game_pid >/dev/null; then
+            misses=0
+        else
+            misses=$((misses + 1))
+            if [ "$misses" -ge 2 ]; then
+                log_msg "Falcon BMS exited, stopping wrapper"
+                stop_wrapper
+                break
+            fi
+        fi
+    done
+    wait "$child"
+    rc=$?
+    child=""
+
+    # Exit code 0 means OpenTrack stopped tracking and told the wrapper to quit.
+    if [ "$misses" -lt 2 ] && [ "$rc" -eq 0 ]; then
+        log_msg "wrapper stopped by OpenTrack"
+        exit 0
+    fi
+    log_msg "wrapper exited (code $rc), waiting for Falcon BMS"
+    sleep 2
+done
+EOF
+    } > "$ot_bridge_script"
+
+    chmod +x "$ot_bridge_script"
+}
+
+# MARK: opentrack_ini_set()
+# Set key=value in [section] of a QSettings ini file, creating either if missing.
+opentrack_ini_set() {
+    ot_ini="$1"
+    awk -v sec="[$2]" -v key="$3" -v val="$4" '
+        function emit() { if (insec && !done) { print key "=" val; done = 1 } }
+        /^\[.*\]$/ { emit(); insec = ($0 == sec); print; next }
+        insec && index($0, key "=") == 1 { if (!done) { print key "=" val; done = 1 }; next }
+        { print }
+        END { if (!done) { if (!insec) print sec; print key "=" val } }
+    ' "$ot_ini" > "$ot_ini.bms-helper.tmp" && mv "$ot_ini.bms-helper.tmp" "$ot_ini"
+}
+
+# MARK: configure_opentrack_profile()
+# Point the active OpenTrack profile's output at the Proton bridge script.
+configure_opentrack_profile() {
+    ot_bridge_script="$1"
+    ot_prefix="$2"
+
+    # Same lookup as OpenTrack: ~/Documents/opentrack-2.3 if it exists, else the config dir
+    ot_ini_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opentrack-2.3"
+    if [ -d "${XDG_DOCUMENTS_DIR:-$HOME/Documents}/opentrack-2.3" ]; then
+        ot_ini_dir="${XDG_DOCUMENTS_DIR:-$HOME/Documents}/opentrack-2.3"
+    fi
+    ot_profile="$(sed -n 's/^settings-filename=//p' "${XDG_CONFIG_HOME:-$HOME/.config}/opentrack-2.3.conf" 2>/dev/null | tail -n 1 | tr -d '"\r')"
+    ot_profile="${ot_profile:-default.ini}"
+    ot_ini="$ot_ini_dir/$ot_profile"
+
+    mkdir -p "$ot_ini_dir"
+    [ -f "$ot_ini" ] || : > "$ot_ini"
+    cp "$ot_ini" "$ot_ini.bms-helper.bak"
+
+    # protocol 1 = NPClient (TrackIR), which is what Falcon BMS uses
+    opentrack_ini_set "$ot_ini" modules protocol-dll wine
+    opentrack_ini_set "$ot_ini" proto-wine variant-wine true
+    opentrack_ini_set "$ot_ini" proto-wine variant-proton false
+    opentrack_ini_set "$ot_ini" proto-wine variant-proton-steamplay false
+    opentrack_ini_set "$ot_ini" proto-wine variant-proton-external false
+    opentrack_ini_set "$ot_ini" proto-wine wine-select-version CUSTOM
+    opentrack_ini_set "$ot_ini" proto-wine wine-custom-version "\"$ot_bridge_script\""
+    opentrack_ini_set "$ot_ini" proto-wine wineprefix "\"$ot_prefix\""
+    opentrack_ini_set "$ot_ini" proto-wine protocol 1
+    opentrack_ini_set "$ot_ini" proto-wine esync false
+    opentrack_ini_set "$ot_ini" proto-wine fsync false
+}
+
+# MARK: setup_opentrack_native()
+# Set up head tracking with native Linux OpenTrack: remove a Windows OpenTrack
+# from the prefix, find or build a Wine-enabled OpenTrack, write the Proton
+# bridge script and configure OpenTrack's output to use it.
+setup_opentrack_native() {
+    getdirs
+    if [ "$?" -eq 1 ]; then
+        message warning "Unable to set up OpenTrack."
+        return 1
+    fi
+    get_current_runner
+
+    if pgrep -x opentrack >/dev/null 2>&1; then
+        message warning "OpenTrack is running. Close it first so it does not overwrite the new settings."
+        return 1
+    fi
+
+    for ot_win_dir in "$wine_prefix/drive_c/Program Files (x86)/opentrack" "$wine_prefix/drive_c/Program Files/opentrack"; do
+        [ -d "$ot_win_dir" ] || continue
+        if message question "A Windows OpenTrack is installed in this prefix:\n$ot_win_dir\n\nIt is not needed with native Linux OpenTrack and would conflict with it. Remove it? (recommended)"; then
+            remove_windows_opentrack "$ot_win_dir" || return 1
+        fi
+    done
+
+    ot_rebuild=0
+    if opentrack_find_native; then
+        # Offer a rebuild when our own build is older than the pinned commit
+        if [ "$opentrack_bin" = "$opentrack_local_prefix/bin/opentrack" ] &&
+           [ "$(cat "$opentrack_local_prefix/.bms-helper-ref" 2>/dev/null)" != "$opentrack_build_ref" ]; then
+            if message question "A newer OpenTrack version is available for the helper-built copy.\n\nRebuild it now?"; then
+                ot_rebuild=1
+            fi
+        fi
+    else
+        if ! message question "No OpenTrack with Wine support was found.\n\n(Distro packages are often built without it; on Arch-based distros the AUR 'opentrack' package includes it.)\n\nBuild OpenTrack from source into:\n$opentrack_local_prefix ?"; then
+            return 1
+        fi
+        ot_rebuild=1
+    fi
+    if [ "$ot_rebuild" -eq 1 ]; then
+        build_opentrack_native || return 1
+        if ! opentrack_find_native; then
+            message error "OpenTrack was built, but its Wine bridge was not found in:\n$opentrack_local_prefix"
+            return 1
+        fi
+    fi
+
+    write_opentrack_bridge_script "$wine_prefix"
+    configure_opentrack_profile "$wine_prefix/$opentrack_bridge_name" "$wine_prefix"
+
+    message info "OpenTrack is set up for Falcon BMS.\n\nOpenTrack: $opentrack_bin\nOutput: Wine (NPClient), via $wine_prefix/$opentrack_bridge_name\n\nStart OpenTrack and press Start, before or after launching Falcon BMS. The bridge attaches once Falcon's launcher is running.\n\nBridge log: $wine_prefix/opentrack/bridge.log"
     return 0
 }
 
