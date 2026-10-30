@@ -105,7 +105,7 @@ umu_local_dir="$data_dir/bms-helper/umu"
 # Static launcher installed into each install root (lib/bms-launcher.sh).
 # Keep bms_launcher_version in sync with its "# version:" line.
 bms_launcher_name="bms-launcher.sh"
-bms_launcher_version="2.0"
+bms_launcher_version="2.1"
 # Install layout written to <install root>/.bms-helper (see lib/config.sh)
 bms_layout_version="2"
 

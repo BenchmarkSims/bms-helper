@@ -441,7 +441,7 @@ migrate_app_shortcuts() {
 # True if a Falcon BMS (or its launcher) Windows process is running.
 # Matches the Windows-side command line, which Wine rewrites with backslashes.
 bms_running() {
-    pgrep -fi '\\(Falcon BMS|FalconBMS_Alternative_Launcher)\.exe' >/dev/null 2>&1
+    pgrep -fi '\\(Falcon BMS|FalconBMS_Alternative_Launcher|FalconBMS\.Launcher)\.exe' >/dev/null 2>&1
 }
 
 # MARK: switch_prefix()

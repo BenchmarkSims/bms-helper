@@ -101,8 +101,10 @@ create_desktop_files() {
     fi
 
     desktop_path="$game_path/Launcher"
+    desktop_wm_class="FalconBMS.Launcher.exe"
     if desktop_launcher_exe="$(find_launcher_exe)"; then
         desktop_path="$(dirname "$desktop_launcher_exe")"
+        desktop_wm_class="$(basename "$desktop_launcher_exe")"
     fi
 
     debug_print continue "Creating ${prefix_desktop_file}..."
@@ -115,7 +117,7 @@ Keywords=Falcon BMS;Simulation;Flight;Game;
 Terminal=false
 StartupNotify=true
 Categories=Game;Simulation;X-WiVRn-VR;
-StartupWMClass=FalconBMS_Alternative_Launcher.exe
+StartupWMClass=$desktop_wm_class
 Exec="$bms_root/$bms_launcher_name"
 Path=$desktop_path
 Icon=$desktop_icon_value
