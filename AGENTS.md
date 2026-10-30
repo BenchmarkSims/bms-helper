@@ -88,6 +88,9 @@ version, tracked_files, config_info         Proton's own files (STEAM_COMPAT_DAT
   runs the runner's `protonfixes/winetricks` on the host.
 - Console output of a Windows exe passed as a Unix path (`umu.exe` path) is
   not captured; `umu-run cmd /c echo x` (no path) is.
+- Through umu/Proton, the console output of Wine tools (`uninstaller --list`
+  etc.) arrives on **stderr**, mixed with the Proton/protonfixes log. Read
+  `2>&1` and filter; `2>/dev/null` gives an empty result.
 - `gamemoderun` and `timeout` can't wrap shell functions. Build a
   command array (`prefix_cmd`) and prepend wrappers.
 - Wine registry files: keys look like `[Software\\Wow6432Node\\...] <timestamp>`
