@@ -286,11 +286,22 @@ apply_prefix_settings() {
 }
 
 # MARK: find_launcher_exe()
-# Print the path of the Falcon BMS launcher executable inside the prefix
+# Print the path of the Falcon BMS launcher executable inside the prefix.
+# Newer BMS versions ship FalconBMS.Launcher.exe instead of
+# FalconBMS_Alternative_Launcher.exe (same folder); the new one wins.
 find_launcher_exe() {
-    launcher_exe="$game_path/Launcher/FalconBMS_Alternative_Launcher.exe"
-    if [ ! -f "$launcher_exe" ]; then
-        launcher_exe="$(find "$bms_pfx/drive_c" -type f -name 'FalconBMS_Alternative_Launcher.exe' 2>/dev/null | head -n 1)"
+    local name launcher_exe=""
+    for name in FalconBMS.Launcher.exe FalconBMS_Alternative_Launcher.exe; do
+        if [ -f "$game_path/Launcher/$name" ]; then
+            launcher_exe="$game_path/Launcher/$name"
+            break
+        fi
+    done
+    if [ -z "$launcher_exe" ]; then
+        for name in FalconBMS.Launcher.exe FalconBMS_Alternative_Launcher.exe; do
+            launcher_exe="$(find "$bms_pfx/drive_c" -type f -name "$name" 2>/dev/null | head -n 1)"
+            [ -n "$launcher_exe" ] && break
+        done
     fi
     [ -n "$launcher_exe" ] && printf '%s\n' "$launcher_exe"
 }

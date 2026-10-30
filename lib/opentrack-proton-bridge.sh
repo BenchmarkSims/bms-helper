@@ -53,7 +53,7 @@ wrapper_pattern='\\opentrack-wrapper-wine\.exe\.so'
 # before the game's wineserver exists, and keep umu from exiting afterwards.
 find_game_pid() {
     local pid env
-    for pid in $(pgrep -fi '\\(Falcon BMS|FalconBMS_Alternative_Launcher)\.exe'); do
+    for pid in $(pgrep -fi '\\(Falcon BMS|FalconBMS_Alternative_Launcher|FalconBMS\.Launcher)\.exe'); do
         env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)" || continue
         case $'\n'"$env"$'\n' in
             *$'\n'"WINEPREFIX=$prefix"$'\n'*|*$'\n'"WINEPREFIX=$prefix/"$'\n'*|\

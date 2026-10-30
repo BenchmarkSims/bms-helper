@@ -115,6 +115,12 @@ version, tracked_files, config_info         Proton's own files (STEAM_COMPAT_DAT
 - Wine's hidraw support is chosen per device inside winebus (VKB, Virpil,
   Thrustmaster...); the Helper only provides the udev `uaccess` rules. Don't
   write hidraw registry keys without checking the runner's winebus source.
+- BMS renamed its launcher from `FalconBMS_Alternative_Launcher.exe` to
+  `FalconBMS.Launcher.exe` (same `Launcher/` folder). Both are supported:
+  `find_launcher_exe` and `bms-launcher.sh` (at every start) prefer the new
+  name and fall back to the old one, so an in-game update that swaps the exe
+  needs no repair. A custom `BMS_LAUNCHER_EXE` with another name is untouched.
+  Process checks (`pgrep`) match both names.
 - Native Wayland (`PROTON_ENABLE_WAYLAND=1`) is opt-in and untested with the
   WPF launcher; XWayland is the default.
 - Don't invent `BMS_*` variables for things Proton, umu or MangoHud already

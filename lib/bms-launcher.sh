@@ -16,7 +16,7 @@
 # The prefix is fully set up by the helper at install/repair time, so this
 # script only prepares the environment and starts Proton.
 #
-# version: 2.0
+# version: 2.1
 # License: GPLv3.0
 
 BMS_ROOT="$(cd -- "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")" && pwd)"
@@ -190,10 +190,25 @@ esac
 ############################################################################
 # Launch
 ############################################################################
+# BMS replaced FalconBMS_Alternative_Launcher.exe with FalconBMS.Launcher.exe
+# in the same folder. When the configured exe is one of the two, start the new
+# one if it is there and fall back to the old one. Other exes are left alone.
+case "$(basename -- "$BMS_LAUNCHER_EXE")" in
+    FalconBMS.Launcher.exe | FalconBMS_Alternative_Launcher.exe)
+        launcher_dir="$(dirname -- "$BMS_LAUNCHER_EXE")"
+        for candidate in FalconBMS.Launcher.exe FalconBMS_Alternative_Launcher.exe; do
+            if [ -f "$launcher_dir/$candidate" ]; then
+                BMS_LAUNCHER_EXE="$launcher_dir/$candidate"
+                break
+            fi
+        done
+        ;;
+esac
 if [ ! -f "$BMS_LAUNCHER_EXE" ]; then
     echo "Launcher executable not found: $BMS_LAUNCHER_EXE" | tee -a "$launch_log" >&2
     exit 1
 fi
+echo "launcher_exe=$BMS_LAUNCHER_EXE" >> "$launch_log"
 # Relative paths in the launcher resolve from its own directory
 cd "$(dirname "$BMS_LAUNCHER_EXE")" || true
 
