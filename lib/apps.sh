@@ -407,6 +407,14 @@ delete_application_shortcut() {
     rm -f "${XDG_DESKTOP_DIR:-$HOME/Desktop}/$deleted_shortcut_name.desktop"
 }
 
+# MARK: list_prefix_apps()
+# Print Wine's "<id>|||<display name>" line for each application registered
+# in the prefix. Through umu/Proton, Wine's console output arrives on stderr,
+# so both streams are read; the Proton log lines never contain "|||".
+list_prefix_apps() {
+    prefix_run uninstaller --list 2>&1 | tr -d '\r' | grep -F '|||'
+}
+
 # MARK: uninstall_application_menu()
 # List the Windows applications registered in the prefix and run the selected
 # one's own uninstaller. Falcon BMS (see 'Uninstall Falcon BMS') and the
@@ -448,7 +456,7 @@ uninstall_application_menu() {
         esac
         uninstall_app_ids+=("${uninstall_line%%|||*}")
         uninstall_app_names+=("$uninstall_app_name")
-    done < <(prefix_run uninstaller --list 2>/dev/null | tr -d '\r')
+    done < <(list_prefix_apps)
 
     if [ "${#uninstall_app_ids[@]}" -eq 0 ]; then
         message info "No uninstallable applications were found in this prefix.\n\n(Falcon BMS, Wine Mono/Gecko, .NET and Visual C++ runtimes are not listed.)"
@@ -515,7 +523,7 @@ uninstall_application_run() {
         update-desktop-database "${data_dir}/applications" 2>/dev/null
     fi
 
-    if prefix_run uninstaller --list 2>/dev/null | tr -d '\r' | grep -qF "$uninstall_app_id|||"; then
+    if list_prefix_apps | grep -qF "$uninstall_app_id|||"; then
         message warning "\"$uninstall_app_name\" is still registered in the prefix. Its uninstaller may have been cancelled or failed; see terminal output for details."
         return 1
     fi
